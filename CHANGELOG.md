@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.3 — 2026-11-23
+
+[Release notes](docs/releases/v1.0.3.md)
+
+- fix: split root view for Xcode 26 type checking (`872b003`)
+- fix: never show scroll indicators in album views (`a766e57`)
+
 ## 1.0.2 — 2026-11-23
 
 [Release notes](docs/releases/v1.0.2.md)
