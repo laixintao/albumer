@@ -25,9 +25,14 @@ def git(repo, *args, data=None, env=None):
     return subprocess.check_output(['git', '-C', str(repo), *args], input=data, env=env)
 
 
-def excluded(name):
-    return (name.startswith('Sources/Albumer/Resources/Fixtures/')
-            or name.startswith('docs/screenshots/') or name == 'scripts/fetch-preview-assets.py')
+def excluded(name, oid):
+    if name.startswith('Sources/Albumer/Resources/Fixtures/'):
+        if name.endswith('.jpg'):
+            return True
+        if name.endswith('/albums.json'):
+            catalog = json.loads(git(ROOT, 'cat-file', 'blob', oid))
+            return not all(item.get('id', '').startswith('preview-') for item in catalog)
+    return name.startswith('docs/screenshots/') or name == 'scripts/fetch-preview-assets.py'
 
 
 def metadata(commit):
@@ -88,7 +93,7 @@ def main():
             info, name = record.split(b'\t', 1)
             mode, kind, oid = info.decode().split()
             name = name.decode()
-            if excluded(name):
+            if excluded(name, oid):
                 continue
             if kind != 'blob' or mode not in ['100644', '100755']:
                 raise RuntimeError(f'Unsupported historical entry: {name}')

@@ -27,3 +27,4 @@ Secrets.xcconfig
 *.local.xcconfig
 __pycache__/
 *.pyc
+dist/

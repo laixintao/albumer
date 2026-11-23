@@ -9,13 +9,13 @@
 ```sh
 make run       # 构建最新 Debug 版本，再打开该开发应用
 make build     # 只构建，不启动应用
-make release   # 构建并检查 Release，输出 build/Albumer.app
+make release-build # 构建并检查 Release，输出 build/Albumer.app
 make test      # 无界面的核心测试
 ```
 
 `make run` 只重启同一路径下的开发实例。脚本默认使用 `/Applications/Xcode.app`，可通过 `DEVELOPER_DIR` 指定其他安装位置，不修改系统的 `xcode-select` 设置。
 
-发布脚本映射源码路径、使用全新应用目录、检查凭据模式及本机路径，并验证本地签名。Release 包含 arm64 和 x86_64；目前在 Apple Silicon 上验证。产物是 ad hoc 本地签名，未做 Developer ID 签名或公证，不能视为面向普通用户的正式安装包。
+发布脚本映射源码路径、使用全新应用目录、检查凭据模式及本机路径，并验证本地签名。Release 包含 arm64 和 x86_64；目前在 Apple Silicon 上验证。产物是 ad hoc 本地签名，未做 Developer ID 签名或公证，首次启动可能需要按 Apple 指引允许打开。
 
 首次启动可选择“预览界面”，也可手动执行：
 
@@ -77,6 +77,41 @@ make public    # 生成可审阅的公开仓库、源码 zip 和 Git bundle；�
 原仓库和原提交不被改写。公开时使用生成的副本；直接推送原仓库仍会公开旧历史素材。脚本不复制原仓库配置、远程地址、reflog 或被剔除的对象；公开副本仍按作者选择保留姓名和邮箱。不会自动推送、上传或创建远程仓库。
 
 凭据扫描是模式检查，不能证明绝无遗漏，也不授予任何第三方权利。公开源码前应审阅最终副本；发布应用还需确认 Spotify 的接入条件、品牌使用规则，并按需要完成 Developer ID 签名和公证。
+
+## Homebrew 与正式发版
+
+```sh
+brew install --cask laixintao/tap/albumer
+```
+
+公开应用仓库为 https://github.com/laixintao/albumer ，tap 为
+https://github.com/laixintao/homebrew-tap 。首次安装仍需要自己的 Spotify Client ID；
+Homebrew 不提供 Spotify 账号资格或 API 配额。
+
+维护者在公开仓库的干净 `main` 分支上发版：
+
+```sh
+git switch main
+git pull --ff-only
+make release                    # 自动递增稳定版本 patch，提交、创建 annotated tag 并原子推送
+# 或 make release VERSION=1.2.0  # 指定比当前更新的稳定版本
+```
+
+`make release` 会进行网络写入，`make release-build` 只在本机构建。先提交应用修改；
+发版脚本在修改版本文件前检查远程分支及 tag 冲突。它自动更新 Info.plist 中的版本和
+build number、CHANGELOG.md 及 docs/releases 中的说明，保留已经提交的策划版说明。
+推送失败会保留提交和 tag，并打印精确重试命令；不要重新运行 `make release` 来重试同一版本。
+
+GitHub Actions 在 macos-15 上运行核心及发布脚本测试，选择 Xcode 26+ SDK，构建通用
+应用，并生成 `Albumer-<version>-macos-universal.dmg` 与同名 ZIP。发布 job 使用这些
+已测试产物，不重新构建；校验两种包的签名、版本、架构、内容一致性及校验和，生成
+SHA256SUMS 与 GitHub provenance attestations 后再公开完整 draft。公开 release 的
+附件不可覆盖，修改二进制需要新版本。macOS 安装／卸载在 tap 的 Apple Silicon 和 Intel CI 上验证。
+
+遵循 [tap 打包规范](https://github.com/laixintao/homebrew-tap/blob/main/docs/RELEASE_STANDARD.md)。
+发版成功后 tap 每 6 小时自动检查，也可手动运行 tap 的 Update casks workflow。
+应用仍使用 ad hoc 签名、尚未 Apple 公证；cask 不关闭 Gatekeeper，也不删除隔离属性。
+如果系统阻止可信应用的首次启动，请按 [Apple 指引](https://support.apple.com/en-us/102445) 操作。
 
 ## 开发与验证
 
