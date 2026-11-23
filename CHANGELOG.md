@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.2 — 2026-11-23
+
+[Release notes](docs/releases/v1.0.2.md)
+
+- test: synchronize pending save assertions explicitly (`2c1e9aa`)
+
 ## 1.0.1 — 2026-11-23
 
 [Release notes](docs/releases/v1.0.1.md)
