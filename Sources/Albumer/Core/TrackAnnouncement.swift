@@ -11,28 +11,26 @@ struct TrackAnnouncement: Equatable, Sendable {
 
     var counter: String { "\(position.map(String.init) ?? "—")/\(total.map(String.init) ?? "—")" }
 
-    init?(state: PlaybackSnapshot?, album: Album?, tracks: [AlbumTrack]) {
+    init?(state: PlaybackSnapshot?, album: Album?, tracks: [AlbumTrack], resolvedAlbumID: AlbumID? = nil) {
         guard let track = state?.item, !track.name.isEmpty else { return nil }
         id = track.id.map { "track:\($0)" }
             ?? "\(track.albumID?.rawValue ?? state?.context?.uri ?? ""):\(track.discNumber ?? 1):\(track.trackNumber ?? 0):\(track.name):\(track.artists.map(\.name).joined(separator: ","))"
         name = track.name
-        let playingAlbumID = track.albumID ?? state?.context?.albumID
+        let playingAlbumID = resolvedAlbumID ?? PlaybackIdentity.albumID(for: state)
+        let sameRelease = track.albumID == playingAlbumID
         let matchingAlbum = album.flatMap { $0.albumID == playingAlbumID ? $0 : nil }
         albumID = playingAlbumID
-        self.album = track.album ?? matchingAlbum
-        artworkURL = track.artwork ?? matchingAlbum?.artwork
-        let knownTotal = track.albumTotalTracks ?? matchingAlbum?.totalTracks
+        self.album = matchingAlbum ?? (sameRelease ? track.album : nil)
+        artworkURL = (sameRelease ? track.artwork : nil) ?? matchingAlbum?.artwork
+        let knownTotal = matchingAlbum?.totalTracks ?? (sameRelease ? track.albumTotalTracks : nil)
         let ordered = tracks.sorted {
             $0.discNumber == $1.discNumber ? $0.trackNumber < $1.trackNumber : $0.discNumber < $1.discNumber
         }
         let completeTracks = !ordered.isEmpty && (knownTotal == nil || ordered.count == knownTotal)
         total = knownTotal.flatMap { $0 > 0 ? $0 : nil } ?? (completeTracks ? ordered.count : nil)
-        if completeTracks, let index = ordered.firstIndex(where: {
-            if let id = track.id, $0.spotifyID == id { return true }
-            return $0.discNumber == (track.discNumber ?? 1) && $0.trackNumber == track.trackNumber
-        }) {
+        if completeTracks, let index = PlaybackIdentity.trackIndex(track, in: ordered, albumID: playingAlbumID) {
             position = index + 1
-        } else if (track.discNumber ?? 1) == 1, let number = track.trackNumber, number > 0,
+        } else if ordered.isEmpty, sameRelease, (track.discNumber ?? 1) == 1, let number = track.trackNumber, number > 0,
                   total.map({ number <= $0 }) ?? true {
             position = number
         } else {

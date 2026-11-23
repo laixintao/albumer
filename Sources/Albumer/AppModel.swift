@@ -47,12 +47,12 @@ final class AppModel {
     var tracks: [AlbumTrack] = []
     var isLoadingTracks = false
     var tracksFailed = false
-    var history = ListeningHistory()
     var isBusy = false
     var isSaving = false
     var savingAlbumID: String?
     var checkingSavedIDs: Set<String> = []
     var saveErrors: [String: String] = [:]
+    var isDisconnecting = false
     var isAuthorizing = false
     var showSettings = false
     var notice: String?
@@ -60,6 +60,7 @@ final class AppModel {
     var isForeground = true
     var nextOffset: Int?
     var clientID: String
+    @ObservationIgnored private let preferences: UserDefaults
     @ObservationIgnored private let auth: SpotifyAuth
     @ObservationIgnored private let client: SpotifyClient
     @ObservationIgnored private let liveService: any SpotifyService
@@ -68,18 +69,19 @@ final class AppModel {
     @ObservationIgnored private let trackAnnouncements: TrackAnnouncementController
     @ObservationIgnored private var announcementMetadataTask: Task<Void, Never>?
     @ObservationIgnored private var announcementMetadataAlbumID: AlbumID?
+    @ObservationIgnored private var metadataAttempts: [AlbumID: Date] = [:]
+    private var playbackAlbums: [String: Album] = [:]
     @ObservationIgnored private var playbackChangeTask: Task<Void, Never>?
     @ObservationIgnored private let injectedCacheAccount: String?
     @ObservationIgnored private let hasInjectedService: Bool
     @ObservationIgnored private var cacheAccount: String?
+    @ObservationIgnored private var cacheGeneration: UUID?
     @ObservationIgnored private var library: CachedLibrary?
-    @ObservationIgnored private var trackCache: [String: CachedTracks] = [:]
+    private var trackCache: [String: CachedTracks] = [:]
     @ObservationIgnored private var artistCache: [String: Artist] = [:]
     @ObservationIgnored private var artistCatalogs: [String: ArtistCatalog] = [:]
     @ObservationIgnored private var savedVersions: [String: Int] = [:]
     @ObservationIgnored private var tracksTask: Task<Void, Never>?
-    @ObservationIgnored private var listeningCounter = ListeningCounter()
-    @ObservationIgnored private var lastHistoryWrite = Date.distantPast
     @ObservationIgnored private var service: any SpotifyService
     @ObservationIgnored private var pollTask: Task<Void, Never>?
     @ObservationIgnored private var startupTask: Task<Void, Never>?
@@ -98,8 +100,9 @@ final class AppModel {
 
     init(demo: Bool = false, service: (any SpotifyService)? = nil, localStore: LocalStore = .shared,
          cacheAccount: String? = nil, dockArtwork: DockArtworkController = .shared,
-         trackAnnouncements: TrackAnnouncementController = TrackAnnouncementController()) {
-        auth = SpotifyAuth()
+         trackAnnouncements: TrackAnnouncementController = TrackAnnouncementController(),
+         auth: SpotifyAuth = SpotifyAuth(), preferences: UserDefaults = .standard) {
+        self.auth = auth; self.preferences = preferences
         client = SpotifyClient(auth: auth)
         liveService = service ?? client
         self.service = demo ? FixtureSpotifyService() : liveService
@@ -107,25 +110,28 @@ final class AppModel {
         self.dockArtwork = dockArtwork; self.trackAnnouncements = trackAnnouncements
         hasInjectedService = service != nil
         isDemo = demo
-        clientID = UserDefaults.standard.string(forKey: "spotifyClientID") ?? ""
+        clientID = preferences.string(forKey: "spotifyClientID") ?? ""
     }
     var isConnected: Bool { connection == .connected }
     var hasPlayback: Bool { playback?.item != nil }
     var dockPlaybackInfo: DockPlaybackInfo {
         let tracks = playingAlbumID.flatMap { trackCache[$0.rawValue]?.tracks } ?? []
-        return DockPlaybackInfo(playback: playback, album: playingAlbum, tracks: tracks, connected: isConnected, busy: isBusy)
+        return DockPlaybackInfo(playback: playback, album: playingAlbum, tracks: tracks, connected: isConnected, busy: isBusy, resolvedAlbumID: playingAlbumID)
     }
-    var playingAlbumID: AlbumID? { playback?.item?.albumID ?? playback?.context?.albumID }
+    var playingAlbumID: AlbumID? {
+        let contextTracks = playback?.context?.albumID.flatMap { trackCache[$0.rawValue]?.tracks }
+        return PlaybackIdentity.albumID(for: playback, contextTracks: contextTracks)
+    }
     var playingAlbum: Album? {
         guard let id = playingAlbumID else { return nil }
         if let album = playback?.item?.album, album.albumID == id { return album }
         if let album = selectedAlbum, album.albumID == id { return album }
-        return albums.first { $0.albumID == id } ?? library?.albums.first { $0.albumID == id }
+        return playbackAlbums[id.rawValue] ?? albums.first { $0.albumID == id } ?? library?.albums.first { $0.albumID == id }
             ?? artistCatalogs.values.lazy.compactMap { $0.albums.first { $0.albumID == id } }.first
     }
     var playingArtworkURL: URL? {
-        if let artwork = playback?.item?.artwork { return artwork }
         guard let id = playingAlbumID else { return nil }
+        if playback?.item?.albumID == id, let artwork = playback?.item?.artwork { return artwork }
         let candidates = [playingAlbum, selectedAlbum, albums.first { $0.albumID == id }, library?.albums.first { $0.albumID == id }]
         return candidates.compactMap { $0 }.first { $0.albumID == id && $0.artwork != nil }?.artwork
     }
@@ -138,28 +144,36 @@ final class AppModel {
     private func updateTrackAnnouncement() {
         let id = playingAlbumID
         let cached = id.flatMap { trackCache[$0.rawValue]?.tracks } ?? []
-        let announcement = TrackAnnouncement(state: playback, album: playingAlbum, tracks: cached)
+        let announcement = TrackAnnouncement(state: playback, album: playingAlbum, tracks: cached, resolvedAlbumID: id)
         trackAnnouncements.update(announcement, isPlaying: playback?.isPlaying == true)
-        guard playback?.isPlaying == true, let track = playback?.item, let id else { return }
-        // Disc two and partial Spotify metadata need the complete track list for an honest n/total.
-        guard cached.isEmpty, (track.discNumber ?? 1) > 1 || announcement?.total == nil,
-              announcementMetadataAlbumID != id else { return }
+        guard let track = playback?.item, let id else { return }
+        let needsTracks = trackCache[id.rawValue] == nil &&
+            ((track.discNumber ?? 1) > 1 || announcement?.total == nil || track.albumID != id)
+        let needsAlbum = playingAlbum == nil
+        guard needsTracks || needsAlbum, announcementMetadataAlbumID != id,
+              Date.now.timeIntervalSince(metadataAttempts[id] ?? .distantPast) >= 30 else { return }
         announcementMetadataTask?.cancel()
         announcementMetadataAlbumID = id
+        metadataAttempts[id] = .now
         let session = sessionGeneration
         let service = service
         announcementMetadataTask = Task {
-            do {
-                let tracks = try await service.albumTracks(id)
-                guard !Task.isCancelled, session == sessionGeneration, playingAlbumID == id, !tracks.isEmpty else { return }
-                trackCache[id.rawValue] = CachedTracks(tracks: tracks, updatedAt: .now)
-                updateTrackAnnouncement()
-            } catch { /* Optional metadata must never interrupt the music or raise a banner. */ }
+            defer {
+                if !Task.isCancelled, announcementMetadataAlbumID == id { announcementMetadataAlbumID = nil }
+            }
+            let album = needsAlbum ? try? await service.album(id) : nil
+            let tracks = needsTracks ? try? await service.albumTracks(id) : nil
+            guard !Task.isCancelled, session == sessionGeneration, playingAlbumID == id else { return }
+            if let album, album.albumID == id { playbackAlbums[id.rawValue] = album }
+            if let tracks { trackCache[id.rawValue] = CachedTracks(tracks: tracks, updatedAt: .now) }
+            announcementMetadataAlbumID = nil
+            updatePlaybackPresentation()
         }
     }
 
     private func resetTrackAnnouncements() {
         trackAnnouncements.reset()
+        metadataAttempts = [:]; playbackAlbums = [:]
         announcementMetadataTask?.cancel(); announcementMetadataTask = nil; announcementMetadataAlbumID = nil
         playbackChangeTask?.cancel(); playbackChangeTask = nil
     }
@@ -199,6 +213,7 @@ final class AppModel {
     func start() async {
         if isDemo { connection = .connected; await loadPage(offset: 0); await refreshPlayback(); restartPolling(); return }
         do {
+            try await localStore.prepare()
             connection = try await auth.restore() ? .connected : .disconnected
             if isConnected {
                 await restoreLocalData()
@@ -207,9 +222,9 @@ final class AppModel {
         } catch { connection = .disconnected; report(error) }
     }
     func connect() {
-        guard !isAuthorizing else { return }
+        guard !isAuthorizing, !isDisconnecting else { return }
         clientID = clientID.trimmingCharacters(in: .whitespacesAndNewlines)
-        UserDefaults.standard.set(clientID, forKey: "spotifyClientID")
+        preferences.set(clientID, forKey: "spotifyClientID")
         isAuthorizing = true; notice = nil
         connectTask = Task {
             defer { isAuthorizing = false }
@@ -217,6 +232,7 @@ final class AppModel {
                 try await auth.authorize(clientID: clientID) { url in
                     await MainActor.run { _ = NSWorkspace.shared.open(url) }
                 }
+                try Task.checkCancellation()
                 await finishConnection()
             } catch { report(error) }
         }
@@ -232,7 +248,6 @@ final class AppModel {
         selectedAlbum = nil; playback = nil; resetDevices()
         query = ""; isSearching = false; nextOffset = nil; library = nil; cacheAccount = nil
         collectionOffset = 0; searchOffset = 0; tracks = []; trackCache = [:]; artistCache = [:]
-        listeningCounter = ListeningCounter()
         await client.resetBackoff()
         showSettings = false
         NSApp?.activate(ignoringOtherApps: true)
@@ -245,24 +260,29 @@ final class AppModel {
         Task { await auth.cancelAuthorization() }
     }
     func disconnect() async {
+        guard !isDisconnecting else { return }
+        isDisconnecting = true; notice = nil; connection = .disconnected
+        defer { isDisconnecting = false }
         generation += 1; sessionGeneration += 1; resetArtistCatalogs()
         pollTask?.cancel(); searchTask?.cancel(); connectTask?.cancel(); tracksTask?.cancel()
-        do { try await auth.disconnect() } catch { report(error); return }
+        do { try await auth.disconnect() } catch { report(error) }
         service = liveService; isDemo = false; connection = .disconnected
         albums = []; hasLoadedPage = false; selectedAlbum = nil; playback = nil; resetDevices()
         savedIDs = []; checkedSavedIDs = []
         query = ""; isSearching = false; isLoading = false; isBusy = false; isSaving = false
-        library = nil; tracks = []; trackCache = [:]; artistCache = [:]; history = ListeningHistory(); listeningCounter = ListeningCounter()
+        library = nil; tracks = []; trackCache = [:]; artistCache = [:]
         collectionOffset = 0; searchOffset = 0
-        if let cacheAccount { await localStore.removeAccountCache(cacheAccount) }
-        cacheAccount = nil
+        cacheAccount = nil; cacheGeneration = nil
+        clientID = ""; preferences.removeObject(forKey: "spotifyClientID")
         dockArtwork.update(nil)
         ImageStore.shared.clear()
+        do { try await localStore.removeUserData() }
+        catch { notice = "本地数据未能完全删除，请在设置中重试清除本地数据。" }
     }
     func enterDemo() async {
         generation += 1; sessionGeneration += 1; resetArtistCatalogs(); pollTask?.cancel(); searchTask?.cancel()
         service = FixtureSpotifyService(); isDemo = true; connection = .connected
-        tracksTask?.cancel(); library = nil; cacheAccount = nil; history = ListeningHistory(); listeningCounter = ListeningCounter()
+        tracksTask?.cancel(); library = nil; cacheAccount = nil
         tracks = []; trackCache = [:]; artistCache = [:]; collectionOffset = 0; searchOffset = 0
         dockArtwork.update(nil)
         ImageStore.shared.clear()
@@ -274,7 +294,7 @@ final class AppModel {
     func exitDemo() async {
         generation += 1; sessionGeneration += 1; resetArtistCatalogs(); pollTask?.cancel(); searchTask?.cancel()
         isDemo = false; service = liveService
-        tracksTask?.cancel(); library = nil; cacheAccount = nil; history = ListeningHistory(); listeningCounter = ListeningCounter()
+        tracksTask?.cancel(); library = nil; cacheAccount = nil
         tracks = []; trackCache = [:]; artistCache = [:]; collectionOffset = 0; searchOffset = 0
         ImageStore.shared.clear()
         albums = []; hasLoadedPage = false; playback = nil; selectedAlbum = nil; query = ""; isSearching = false; resetDevices()
@@ -318,12 +338,11 @@ final class AppModel {
         }
         guard let cacheAccount else { return }
         let cached = await localStore.library(account: cacheAccount)
-        let history = await localStore.history(account: cacheAccount)
+        let cacheGeneration = await localStore.generation()
         let rememberedDeviceID = await localStore.preferredDeviceID(account: cacheAccount)
         guard session == sessionGeneration else { return }
-        self.history = history
+        self.cacheGeneration = cacheGeneration
         self.rememberedDeviceID = rememberedDeviceID
-        listeningCounter = history.session ?? ListeningCounter()
         if let cached {
             library = cached; albums = cached.albums; nextOffset = cached.nextOffset; hasLoadedPage = true
             savedIDs = Set(albums.map(\.id)); checkedSavedIDs = savedIDs
@@ -381,7 +400,7 @@ final class AppModel {
                 }
                 let updated = CachedLibrary(albums: albums, nextOffset: next, updatedAt: append ? library?.updatedAt ?? .now : .now)
                 library = updated
-                if let cacheAccount, !isDemo { await localStore.saveLibrary(updated, account: cacheAccount) }
+                if let cacheAccount, !isDemo { await localStore.saveLibrary(updated, account: cacheAccount, generation: cacheGeneration) }
             }
             updatePlaybackPresentation()
         } catch { if generation == self.generation { loadMoreFailed = append; report(error, quietly: hasLoadedPage) } }
@@ -393,38 +412,6 @@ final class AppModel {
     func loadRemainingCollection() async {
         guard isConnected, !isSearching, !isLoading, !loadMoreFailed, let nextOffset else { return }
         await loadPage(offset: nextOffset, append: true, allRemaining: true)
-    }
-
-    func makeRecommendationPrompt() async throws -> AlbumRecommendationPrompt {
-        guard isConnected else { throw SpotifyError.signedOut }
-        let session = sessionGeneration
-        let versions = savedVersions
-        let service = service
-        // Use saved albums even if a search or an artist page is currently on screen.
-        var favorites = library?.albums ?? []
-        var next: Int? = library == nil ? 0 : library?.nextOffset
-        var visited = Set<Int>()
-        do {
-            while let offset = next, visited.count < 100, visited.insert(offset).inserted {
-                try Task.checkCancellation()
-                let page = try await service.savedAlbums(offset: offset)
-                try Task.checkCancellation()
-                guard session == sessionGeneration else { throw CancellationError() }
-                favorites += page.albums
-                next = page.nextOffset
-                if let next, next <= offset { break }
-            }
-        } catch {
-            // Offline copying can still use known favorites, explicitly marked as a partial list.
-            guard NetworkRetry.isTransient(error), !favorites.isEmpty else { throw error }
-        }
-        try Task.checkCancellation()
-        guard session == sessionGeneration else { throw CancellationError() }
-        guard versions == savedVersions else { throw RecommendationPromptError.collectionChanged }
-        guard let prompt = AlbumRecommendationPrompt(albums: favorites, isComplete: next == nil) else {
-            throw RecommendationPromptError.emptyLibrary
-        }
-        return prompt
     }
 
     func select(_ album: Album) {
@@ -617,7 +604,7 @@ final class AppModel {
             guard session == sessionGeneration, !Task.isCancelled else { return nil }
             guard let duration = totalDuration(fetched, for: album) else { return nil }
             trackCache[album.id] = CachedTracks(tracks: fetched, updatedAt: .now)
-            if let cacheAccount, !isDemo { await localStore.saveTracks(fetched, album: album.id, account: cacheAccount) }
+            if let cacheAccount, !isDemo { await localStore.saveTracks(fetched, album: album.id, account: cacheAccount, generation: cacheGeneration) }
             return duration
         } catch {
             guard session == sessionGeneration, !Task.isCancelled else { return nil }
@@ -650,7 +637,7 @@ final class AppModel {
             self.tracks = tracks; tracksFailed = false
             trackCache[album.id] = CachedTracks(tracks: tracks, updatedAt: .now)
             if playingAlbumID == album.albumID { updateTrackAnnouncement() }
-            if let cacheAccount, !isDemo { await localStore.saveTracks(tracks, album: album.id, account: cacheAccount) }
+            if let cacheAccount, !isDemo { await localStore.saveTracks(tracks, album: album.id, account: cacheAccount, generation: cacheGeneration) }
         } catch {
             if !Task.isCancelled && selectedAlbum?.id == album.id && session == sessionGeneration { tracksFailed = true }
         }
@@ -681,7 +668,7 @@ final class AppModel {
                 }
                 self.library = library
                 if !isSearching { albums = library.albums; nextOffset = library.nextOffset }
-                if let cacheAccount, !isDemo { await localStore.saveLibrary(library, account: cacheAccount) }
+                if let cacheAccount, !isDemo { await localStore.saveLibrary(library, account: cacheAccount, generation: cacheGeneration) }
             } else if !isSearching {
                 albums.removeAll { $0.id == album.id }
                 if saving { albums.insert(album, at: 0) }
@@ -715,8 +702,6 @@ final class AppModel {
             try await service.playAlbum(album.albumID, device: device)
             guard session == sessionGeneration else { return }
             try await confirm { $0?.context?.uri == album.albumID.uri && $0?.device?.id == device && $0?.isPlaying == true && $0?.shuffleState == false && $0?.repeatState == "off" }
-            listeningCounter.beganAlbum()
-            _ = listeningCounter.observe(playback)
         } catch { if session == sessionGeneration { report(error) } }
     }
     func togglePlayback() async {
@@ -801,7 +786,7 @@ final class AppModel {
             // Do not block that first start waiting for an existing playback context.
             if hasPlayback { try await confirm { $0?.device?.id == id } }
             preferredDevice = device; rememberedDeviceID = id
-            if let cacheAccount, !isDemo { await localStore.savePreferredDeviceID(id, account: cacheAccount) }
+            if let cacheAccount, !isDemo { await localStore.savePreferredDeviceID(id, account: cacheAccount, generation: cacheGeneration) }
         } catch { if session == sessionGeneration { report(error) } }
     }
     func openSpotify() {
@@ -844,13 +829,6 @@ final class AppModel {
             else { devices.append(device) }
         }
         updatePlaybackPresentation()
-        let event = listeningCounter.observe(state)
-        if let album = event.album { history.albums[album, default: 0] += 1 }
-        if let track = event.track { history.tracks[track, default: 0] += 1 }
-        if !event.isEmpty || Date.now.timeIntervalSince(lastHistoryWrite) >= 15 {
-            history.session = listeningCounter; lastHistoryWrite = .now
-            if let cacheAccount, !isDemo { await localStore.saveHistory(history, account: cacheAccount) }
-        }
     }
     private func confirm(_ matches: (PlaybackSnapshot?) -> Bool) async throws {
         let sessionGeneration = sessionGeneration

@@ -40,6 +40,9 @@ for file in allfiles:
     obj(path, "PBXFileReference", lastKnownFileType="sourcecode.swift", path=path, sourceTree="SOURCE_ROOT")
 assets = "Sources/Albumer/Resources/Assets.xcassets"
 fixtures = "Sources/Albumer/Resources/Fixtures"
+legal = ["LICENSE", "PRIVACY.md", "TERMS.md", "THIRD_PARTY_NOTICES.md"]
+for path in legal:
+    obj(path, "PBXFileReference", lastKnownFileType="text", path=path, sourceTree="SOURCE_ROOT")
 obj(assets, "PBXFileReference", lastKnownFileType="folder.assetcatalog", path=assets, sourceTree="SOURCE_ROOT")
 obj(fixtures, "PBXFileReference", lastKnownFileType="folder", path=fixtures, sourceTree="SOURCE_ROOT")
 
@@ -55,7 +58,7 @@ for name, files, kind, extension in targets:
     obj(name + "sources", "PBXSourcesBuildPhase", buildActionMask=2147483647, files=source_refs, runOnlyForDeploymentPostprocessing=0)
     resource_refs = []
     if name == "Albumer":
-        for path in [assets, fixtures]: resource_refs.append(Ref(obj(name + path, "PBXBuildFile", fileRef=ref(path))))
+        for path in [assets, fixtures] + legal: resource_refs.append(Ref(obj(name + path, "PBXBuildFile", fileRef=ref(path))))
     obj(name + "resources", "PBXResourcesBuildPhase", buildActionMask=2147483647, files=resource_refs, runOnlyForDeploymentPostprocessing=0)
     obj(name + "frameworks", "PBXFrameworksBuildPhase", buildActionMask=2147483647, files=[], runOnlyForDeploymentPostprocessing=0)
     obj(name + "product", "PBXFileReference", explicitFileType="wrapper.application" if extension == "app" else "wrapper.cfbundle", includeInIndex=0, path=f"{name}.{extension}", sourceTree="BUILT_PRODUCTS_DIR")
@@ -70,6 +73,11 @@ for name, files, kind, extension in targets:
         if name == "Albumer":
             settings.update(INFOPLIST_FILE="Sources/Albumer/Resources/Info.plist", GENERATE_INFOPLIST_FILE="NO",
                             ASSETCATALOG_COMPILER_APPICON_NAME="AppIcon", ENABLE_HARDENED_RUNTIME="YES", ENABLE_APP_SANDBOX="NO")
+            if config == "Release":
+                settings.update(SWIFT_SERIALIZE_DEBUGGING_OPTIONS="NO",
+                                OTHER_SWIFT_FLAGS=["$(inherited)", "-debug-prefix-map", "$(SRCROOT)=/Albumer",
+                                                   "-file-prefix-map", "$(SRCROOT)=/Albumer"],
+                                COPY_PHASE_STRIP="YES", STRIP_INSTALLED_PRODUCT="YES")
         elif name == "AlbumerUITests": settings.update(TEST_TARGET_NAME="Albumer")
         configs.append(Ref(obj(name + config, "XCBuildConfiguration", name=config, buildSettings=settings)))
     obj(name + "configs", "XCConfigurationList", buildConfigurations=configs, defaultConfigurationIsVisible=0, defaultConfigurationName="Release")
@@ -82,12 +90,12 @@ for name, files, kind, extension in targets:
         name=name, productName=name, productReference=ref(name + "product"), productType="com.apple.product-type." + kind)
 
 obj("products", "PBXGroup", children=[ref(n + "product") for n, *_ in targets], name="Products", sourceTree="<group>")
-obj("root", "PBXGroup", children=[ref(str(f.relative_to(ROOT))) for f in allfiles] + [ref(assets), ref(fixtures), ref("products")], sourceTree="<group>")
+obj("root", "PBXGroup", children=[ref(str(f.relative_to(ROOT))) for f in allfiles] + [ref(assets), ref(fixtures)] + [ref(path) for path in legal] + [ref("products")], sourceTree="<group>")
 configs = []
 for config in ["Debug", "Release"]:
     configs.append(Ref(obj("project" + config, "XCBuildConfiguration", name=config,
                           buildSettings=dict(CLANG_ENABLE_MODULES="YES", SWIFT_VERSION="6.0", MACOSX_DEPLOYMENT_TARGET="15.0",
-                                             SDKROOT="macosx", DEBUG_INFORMATION_FORMAT="dwarf" if config == "Debug" else "dwarf-with-dsym"))))
+                                             SDKROOT="macosx", DEBUG_INFORMATION_FORMAT="dwarf"))))
 obj("projectconfigs", "XCConfigurationList", buildConfigurations=configs, defaultConfigurationIsVisible=0, defaultConfigurationName="Release")
 obj("project", "PBXProject", attributes=dict(LastUpgradeCheck="1600", BuildIndependentTargetsInParallel="YES"),
     buildConfigurationList=ref("projectconfigs"), compatibilityVersion="Xcode 14.0", developmentRegion="zh-Hans", hasScannedForEncodings=0,

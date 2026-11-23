@@ -263,7 +263,6 @@ struct CollectionView: View {
                         CurrentAlbumLink(model: model, album: model.playingAlbum, selectAlbum: selectAlbum)
                             .frame(maxWidth: 280, alignment: .leading)
                     }
-                    if !model.isSearching { RecommendationPromptButton(model: model) }
                     Spacer(minLength: 0)
                     PlaybackDevicesView(model: model)
                 }
@@ -436,7 +435,7 @@ private struct CurrentAlbumLink: View {
     var body: some View {
         Button {
             if let album { selectAlbum(album, artworkFrame) }
-            else if let announcement = TrackAnnouncement(state: model.playback, album: nil, tracks: []) {
+            else if let announcement = TrackAnnouncement(state: model.playback, album: nil, tracks: [], resolvedAlbumID: model.playingAlbumID) {
                 Task { await model.openAlbum(from: announcement) }
             }
         } label: {
@@ -449,7 +448,7 @@ private struct CurrentAlbumLink: View {
                         Image(systemName: "opticaldisc").foregroundStyle(.secondary)
                     }
                 }
-                    .frame(width: 48, height: 48).clipShape(RoundedRectangle(cornerRadius: 4))
+                    .frame(width: 48, height: 48)
                     .opacity(album != nil && returningAlbumID == album?.id ? 0 : 1)
                     .anchorPreference(key: AlbumReturnDestinationKey.self, value: .bounds) { anchor in
                         album.map { [$0.id: [anchor]] } ?? [:]
@@ -500,207 +499,105 @@ struct AlbumCard: View {
     var hoverEnabled = true
     let action: (CGRect) -> Void
     @Environment(\.returningAlbumID) private var returningAlbumID
-    @MotionPreference private var reduceMotion
     @FocusState private var focused: Bool
     @State private var hovered = false
     @State private var artworkFrame = CGRect.zero
-    @State private var flip = AlbumFlipState()
-    @State private var angle = 0.0
-    @State private var loadMetadata = false
+    @State private var showDetails = false
+    @State private var detailsHovered = false
 
-    private var canHover: Bool { hoverEnabled && returningAlbumID == nil }
-    private var highlighted: Bool { canHover && (hovered || focused) }
+    private var highlighted: Bool { hoverEnabled && returningAlbumID == nil && (hovered || focused || detailsHovered) }
 
     var body: some View {
-        Button { action(artworkFrame) } label: {
-            // Hit testing stays square while the artwork turns edge-on. Motion cannot trigger hover exits.
-            Color.clear.aspectRatio(1, contentMode: .fit)
-                .overlay {
-                    ZStack {
-                        cover.modifier(AlbumCardFace(angle: angle, back: false))
-                        AlbumCardBack(model: model, album: album, current: current, playing: playing, loadMetadata: loadMetadata)
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 6)
-                                    .strokeBorder(current ? Color.accentColor : Color.primary.opacity(0.12), lineWidth: current ? 3 : 0.5)
-                            }
-                            .modifier(AlbumCardFace(angle: angle, back: true))
+        Button { showDetails = false; action(artworkFrame) } label: {
+            VStack(alignment: .leading, spacing: 7) {
+                AlbumArtwork(album: album)
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(AlbumInsertion.coordinateSpace)) } action: {
+                        artworkFrame = $0
                     }
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                    .allowsHitTesting(false)
+                    .opacity(returningAlbumID == album.id ? 0 : 1)
+                    .anchorPreference(key: AlbumReturnDestinationKey.self, value: .bounds) { [album.id: [$0]] }
+                HStack(spacing: 4) {
+                    if current {
+                        PlaybackIndicator(playing: playing)
+                        Text(playing ? "正在播放" : "已暂停").foregroundStyle(Color.accentColor)
+                    } else {
+                        Text(album.name).foregroundStyle(.primary)
+                    }
+                    Spacer(minLength: 0)
+                    if showYear, let year = album.releaseYear {
+                        Text(String(year)).monospacedDigit().foregroundStyle(.secondary)
+                    }
                 }
-                .contentShape(Rectangle())
+                .font(.caption).lineLimit(1)
+                .frame(height: 18)
+            }
+            .padding(5)
+            .background(highlighted ? Color.primary.opacity(0.06) : Color.clear)
+            .overlay {
+                RoundedRectangle(cornerRadius: 5)
+                    .strokeBorder(current ? Color.accentColor : Color.clear, lineWidth: 2)
+            }
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .opacity(returningAlbumID == album.id ? 0 : 1)
-        .anchorPreference(key: AlbumReturnDestinationKey.self, value: .bounds) { [album.id: [$0]] }
         .contextMenu {
             ForEach(Array(album.artists.enumerated()), id: \.offset) { _, artist in
                 if artist.id != nil {
                     Button("查看 \(artist.name)", systemImage: "person.crop.circle") { model.openArtist(artist) }
                 }
             }
+            if !model.isDemo {
+                Link("在 Spotify 中打开", destination: album.spotifyURL)
+            }
         }
         .focused($focused)
-        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(AlbumInsertion.coordinateSpace)) } action: {
-            artworkFrame = $0
-        }
-        .onHover { inside in
-            hovered = inside
-            // Handle the event immediately: a quick enter/exit can occur within one render frame.
-            updateHighlight()
-        }
-        .onChange(of: focused) { _, _ in updateHighlight() }
-        .onChange(of: canHover) { _, _ in updateHighlight() }
-        .onChange(of: reduceMotion) { _, _ in resetMotion(showBack: highlighted) }
-        .onDisappear { resetMotion(); hovered = false }
-        .task(id: flip.phase) { await animatePhase() }
+        .onHover { hovered = $0 }
+        .onDisappear { hovered = false; detailsHovered = false; showDetails = false }
         .task(id: highlighted) {
-            loadMetadata = false
-            guard highlighted else { return }
-            do { try await Task.sleep(for: .milliseconds(240)) } catch { return }
-            guard !Task.isCancelled, highlighted else { return }
-            loadMetadata = true
+            guard highlighted else {
+                do { try await Task.sleep(for: .milliseconds(180)); try Task.checkCancellation() }
+                catch { return }
+                showDetails = false
+                return
+            }
+            do { try await Task.sleep(for: .milliseconds(400)); try Task.checkCancellation() }
+            catch { return }
+            showDetails = true
         }
-        .zIndex(flip.phase != .front ? 1 : 0)
+        .popover(isPresented: $showDetails, arrowEdge: .trailing) {
+            AlbumCardDetails(model: model, album: album)
+                .onHover { detailsHovered = $0 }
+                .onDisappear { detailsHovered = false }
+        }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(album.name)，\(album.artist)\(album.releaseYear.map { "，\($0) 年" } ?? "")，\(album.totalTracks) 首\(current ? (playing ? "，正在播放" : "，已暂停") : "")")
         .accessibilityIdentifier("album-\(album.id)")
     }
-
-    private var cover: some View {
-        AlbumArtwork(album: album)
-            .overlay(alignment: .topLeading) {
-                if showYear, let year = album.releaseYear {
-                    Text(String(year)).font(.caption).monospacedDigit()
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 6).padding(.vertical, 3)
-                        .background(.black.opacity(0.75), in: RoundedRectangle(cornerRadius: 4))
-                        .padding(7)
-                }
-            }
-            .overlay(alignment: .bottomTrailing) {
-                if current {
-                    Label(playing ? "正在播放" : "已暂停", systemImage: playing ? "speaker.wave.2.fill" : "pause.fill")
-                        .font(.caption.weight(.semibold)).foregroundStyle(.white)
-                        .padding(.horizontal, 10).padding(.vertical, 6)
-                        .background(playing ? Color.accentColor : Color.black.opacity(0.8), in: Capsule())
-                        .padding(7)
-                }
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: 6)
-                    .strokeBorder(current ? Color.accentColor : Color.primary.opacity(highlighted ? 0.25 : 0), lineWidth: current ? 3 : 1)
-            }
-    }
-
-    private func updateHighlight() {
-        guard canHover else { resetMotion(); return }
-        if reduceMotion { resetMotion(showBack: highlighted) }
-        else { flip.setHighlighted(highlighted) }
-    }
-
-    private func resetMotion(showBack: Bool = false) {
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            flip.reset(showBack: showBack)
-            angle = showBack ? 180 : 0
-            if !showBack { loadMetadata = false }
-        }
-    }
-
-    private func animatePhase() async {
-        guard !reduceMotion, canHover else { return }
-        let phase = flip.phase
-        do {
-            switch phase {
-            case .front, .back: return
-            case .turningToBack:
-                // 360° and 0° are the same face. Reset between turns without rotating backwards.
-                if angle == 360 {
-                    var transaction = Transaction()
-                    transaction.disablesAnimations = true
-                    withTransaction(transaction) { angle = 0 }
-                    try await Task.sleep(for: .milliseconds(16))
-                }
-                withAnimation(.easeInOut(duration: 0.22)) { angle = 180 }
-                try await Task.sleep(for: .milliseconds(220))
-            case .turningToFront:
-                withAnimation(.easeInOut(duration: 0.20)) { angle = 360 }
-                try await Task.sleep(for: .milliseconds(200))
-            }
-            try Task.checkCancellation()
-            guard flip.phase == phase else { return }
-            flip.finishPhase()
-        } catch { /* Removing or disabling the card cancels its remaining motion. */ }
-    }
 }
 
-private struct AlbumCardBack: View {
+private struct AlbumCardDetails: View {
     let model: AppModel
     let album: Album
-    let current: Bool
-    let playing: Bool
-    let loadMetadata: Bool
     @State private var duration: Int?
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
-        GeometryReader { geometry in
-            let compact = geometry.size.width < 150
-            VStack(alignment: .leading, spacing: compact ? 6 : 10) {
-                HStack(alignment: .top, spacing: 4) {
-                    Text(album.name).font(.system(size: compact ? 11 : 13, weight: .semibold))
-                        .lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
-                    if current { PlaybackIndicator(playing: playing) }
-                }
-                HStack(spacing: 6) {
-                    if let artist = album.artists.first {
-                        ArtistPortrait(model: model, artist: artist, size: compact ? 22 : 28, loadEnabled: loadMetadata)
-                    }
-                    Text(album.artist.isEmpty ? "未知艺人" : album.artist)
-                        .font(.system(size: compact ? 10 : 12)).lineLimit(2)
-                }
-                Spacer(minLength: 0)
-                VStack(alignment: .leading, spacing: compact ? 4 : 6) {
-                    HStack(spacing: 6) {
-                        Label(album.releaseYear.map(String.init) ?? "—", systemImage: "calendar")
-                        Spacer(minLength: 0)
-                        Label("\(album.totalTracks) 首", systemImage: "music.note.list")
-                    }
-                    Label(duration.map { PlaybackProgress.time(Double($0) / 1000) } ?? "—:——", systemImage: "clock")
-                }
-                .font(.system(size: compact ? 10 : 11)).monospacedDigit().foregroundStyle(.white.opacity(0.95))
-                .lineLimit(1)
+        VStack(alignment: .leading, spacing: 12) {
+            Text(album.name).font(.headline).fixedSize(horizontal: false, vertical: true)
+            ForEach(Array(album.artists.enumerated()), id: \.offset) { _, artist in
+                ArtistLink(model: model, artist: artist)
             }
-            .padding(compact ? 9 : 12)
-            .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
-        }
-        .foregroundStyle(.white)
-        .background {
-            if reduceTransparency {
-                Color(nsColor: .controlBackgroundColor)
-            } else {
-                GeometryReader { geometry in
-                    AlbumArtwork(album: album, radius: 0)
-                        .frame(width: geometry.size.width, height: geometry.size.height)
-                        .blur(radius: 1.2, opaque: true)
-                        // A uniform scrim keeps small white text readable, including on pale covers.
-                        .overlay(Color.black.opacity(0.56))
-                }
+            HStack(spacing: 12) {
+                Label(album.releaseYear.map(String.init) ?? "—", systemImage: "calendar")
+                Label("\(album.totalTracks) 首", systemImage: "music.note.list")
             }
+            .font(.caption).foregroundStyle(.secondary)
+            if let duration {
+                Label(PlaybackProgress.time(Double(duration) / 1000), systemImage: "clock")
+                    .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+            }
+            SpotifyAttribution(album: model.isDemo ? nil : album)
         }
-        // Artwork belongs inside the glass surface; placing it behind the glass blurs it a second time.
-        .artworkGlass()
-        .clipShape(RoundedRectangle(cornerRadius: 6))
-        .environment(\.colorScheme, .dark)
-        .accessibilityHidden(true)
-        .task(id: loadMetadata) {
-            guard loadMetadata else { return }
-            let loaded = await model.albumDuration(for: album)
-            guard !Task.isCancelled else { return }
-            duration = loaded
-        }
+        .padding(18).frame(width: 260, alignment: .leading)
+        .task { duration = await model.albumDuration(for: album) }
     }
 }
-

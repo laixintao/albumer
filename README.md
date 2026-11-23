@@ -1,101 +1,90 @@
 # Albumer
 
-一个只选专辑的原生 macOS Spotify 播放器。Swift 6、SwiftUI、AppKit，macOS 15+。
+原生 macOS Spotify 专辑管理客户端。Swift 6、SwiftUI、AppKit，macOS 15+；使用系统字体、SF Symbols 和语义颜色，macOS 26+ 的控件使用 Liquid Glass。
 
-界面采用原生 macOS 工具栏、SF Symbols、系统字体与语义颜色，跟随系统切换深浅外观。内容区使用纯色底面；专辑封面、播放控制和资料在左栏，曲目列表在右侧。macOS 26 及更新系统使用原生 Liquid Glass 设备控件组、播放按钮和当前专辑入口；较早的系统使用标准材质与按钮。
+## 本地开发
 
-## 运行
-
-需要完整 Xcode；无需安装第三方依赖。
-
-本地开发使用：
+需要完整 Xcode，无第三方包依赖。
 
 ```sh
-make run
+make run       # 构建最新 Debug 版本，再打开该开发应用
+make build     # 只构建，不启动应用
+make release   # 构建并检查 Release，输出 build/Albumer.app
+make test      # 无界面的核心测试
 ```
 
-每次先增量构建最新的 Debug 版本，再重启并打开当前仓库的开发应用。只会退出同一路径下的旧开发实例，不影响已安装的其他版本。`make build` 仅构建、不打开应用。
+`make run` 只重启同一路径下的开发实例。脚本默认使用 `/Applications/Xcode.app`，可通过 `DEVELOPER_DIR` 指定其他安装位置，不修改系统的 `xcode-select` 设置。
 
-构建 Release 版本：
+发布脚本映射源码路径、使用全新应用目录、检查凭据模式及本机路径，并验证本地签名。Release 包含 arm64 和 x86_64；目前在 Apple Silicon 上验证。产物是 ad hoc 本地签名，未做 Developer ID 签名或公证，不能视为面向普通用户的正式安装包。
 
-```sh
-./scripts/build-app.sh
-open build/Albumer.app
-```
-
-也可以用 Xcode 打开 `Albumer.xcodeproj`，选择 **Albumer → My Mac** 运行。构建脚本默认使用 `/Applications/Xcode.app`，可通过 `DEVELOPER_DIR` 指定其他安装位置；不会修改系统的 `xcode-select` 设置。脚本产物包含 arm64／x86_64，已在 Apple Silicon Mac 上验证，使用本地签名，尚未进行 Developer ID 公证。
-
-首次打开可选择 **预览界面**。预览使用独立的固定数据，不连接账号、不发出播放命令，也不播放音频。命令行预览：
+首次启动可选择“预览界面”，也可手动执行：
 
 ```sh
 open build/Albumer.app --args --demo
 ```
 
+预览使用原创几何图片与虚构专辑、艺人、曲目，不连接账号，不播放音频。图片与元数据可用 `python3 scripts/generate-preview-fixtures.py` 离线重新生成。
+
 ## 连接 Spotify
 
-1. 使用有 **Premium** 的账号登录 [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)，创建应用，选择 **Web API**。
-2. 将 Redirect URI 设置为 **`http://127.0.0.1:8888/callback`**，点击 **Add** 后保存。请保留端口 `8888`，不要使用 `localhost`，不要添加末尾斜杠。Spotify 文档允许不带端口的回环地址，但当前 Dashboard 表单会拒绝它；Albumer 使用固定端口，使注册地址与授权请求完全一致。
-3. 复制 **Client ID**，在 Albumer 设置中粘贴，点击 **连接 Spotify**，在浏览器中完成授权。**无需 Client Secret**。
-4. 打开并登录 Spotify 桌面客户端，或让一个 Spotify Connect 设备上线。Albumer 会自动选中可用输出设备，点击播放即可；设备与 Spotify 来源入口一起显示在收藏页和曲目列表右上方，可随时切换。点击 Spotify 标识可打开 Spotify。
+连接前请阅读 [隐私说明](PRIVACY.md) 和 [使用条款](TERMS.md)，应用欢迎页和设置页也提供离线版本。
 
-新应用的开发模式最多支持 5 位授权用户。朋友需要加入该应用的 **Users Management** 名单；应用所有者与播放用户需要满足 Spotify 的 Premium 要求。登录成功但 API 返回 403 时，检查授权名单、Premium 和设备限制。
+1. 在 [Spotify Developer Dashboard](https://developer.spotify.com/dashboard) 创建应用，选择 Web API。
+2. 注册回调地址 **`http://127.0.0.1:8888/callback`**，保留端口和路径，不要使用 `localhost` 或添加末尾斜杠。
+3. 在 Albumer 设置中填入自己的 **Client ID**，点击“连接 Spotify”，在浏览器中授权。无需 Client Secret。
+4. 打开 Spotify 桌面客户端或让一个 Spotify Connect 设备上线。应用自动选择可控设备，也可在页面上切换。
 
-如果 Dashboard 显示 “This redirect URI is not secure”，确认填写了上方包含 `:8888` 的完整地址。授权时 Albumer 会临时监听本机 `127.0.0.1:8888`，完成或取消后关闭；若提示端口被占用，请关闭其他 Albumer 实例或占用该端口的程序后重试。
+Spotify 账号、应用所有者的 Premium 条件、开发模式用户白名单和配额以 [Spotify 官方规则](https://developer.spotify.com/documentation/web-api/concepts/quota-modes) 为准。开发模式应用通常最多支持 5 位授权用户。API 返回 403 时请检查账号资格、授权名单和设备限制；开源代码不自动获得面向公众的 Spotify API 权限。
 
-声音始终由 Spotify 客户端／Connect 设备播放。退出 Albumer 不会停止 Spotify。新开始的专辑会关闭随机播放和循环，从第一首开始；暂停后继续播放不会重新开始。Spotify 的自动续播及现有队列没有完整的官方关闭／清空 API；希望播完专辑就停下时，请在 Spotify 里关闭自动播放并清空队列。
+授权只在本机 `127.0.0.1:8888` 临时监听，完成或取消后关闭。声音始终由 Spotify 客户端／Connect 设备播放，退出 Albumer 不会停止 Spotify。新开始专辑时关闭随机播放和循环，从第一首开始；暂停后继续不会重新开始。Spotify 的自动续播和既有队列需在 Spotify 内管理。
 
 ## 使用
 
-- 收藏和搜索都只显示 `album`、`compilation`；`single` 会被过滤，包括 Spotify 归为该类型的 EP。
-- 收藏对应 Spotify **Your Library → Albums**。密集封面墙默认只展示封面，按年份排序时才在左上角显示发行年份，悬停可看名称；滚动到底部继续加载，不需要翻页。返回时保留列表和滚动位置。
-- 收藏页左上方的复制图标可一键复制推荐 Prompt，包含收藏专辑的艺人、名称、年份，以及“只推荐一张、不重复已有专辑、避免同质化、探索陌生风格、兼顾流行程度与经典口碑”的偏好，粘贴给 AI 即可使用。复制时会补齐未加载的收藏；网络暂时不可用时使用已知收藏，并明确标注为部分清单。复制成功后短暂显示数量。
-- 鼠标划过时专辑会在原封面范围内翻到玻璃背面：轻度柔化原封面，保留完整构图，搭配透明 Liquid Glass，展示名称、艺人头像与名称、发行年份、曲目数和总时长。快速扫过多张时，每张独立平稳翻转，再转回封面；停留或键盘聚焦时保留背面。照片与时长只在停留后按需加载并复用缓存，缺失时显示占位，不改变网格布局。开启“减少动态效果”时直接切换正背面，开启“减少透明度”时使用实色底面。
-- 收藏页顶部跟随实际播放，展示封面、专辑名称、艺人和播放状态，点击可进入该专辑；单曲、播放列表中的歌曲及未收藏的专辑也会显示。专辑资料不完整时先显示已有的歌曲信息，点击后按专辑 ID 补全。封面墙中的当前专辑使用强调色描边和“正在播放”实色标签，暂停时显示“已暂停”；较早的刷新结果不会覆盖较新的播放操作确认。
-- 收藏页工具栏的“显示选项”可切换按主要艺人分组，以及收藏顺序、年份从新到旧或从旧到新；菜单栏的“显示”提供同样的选项。分组内遵循同一排序，选择会保存在本机。启用分组或年份排序时会补齐收藏数据，以保证全库排列一致。年份来自 Spotify 的该发行版本，缺失年份的专辑排在末尾。
-- 切换分组或排序时，封面以原尺寸平滑移动到新位置，保留当前滚动位置；移动期间暂缓悬停翻牌。开启“减少动态效果”时直接更新排列。
-- 启动先显示本地收藏缓存，超过 60 秒的列表会在后台同步；也可以点刷新图标或按 `⌘R` 立即同步。网络不可用时保留已有内容。
-- 临时断线、超时和 Spotify 服务端暂时故障会自动退避重试，最多额外 3 次；短暂限流会按 `Retry-After` 等待，长时间限流与配额耗尽不会连续发送请求。后台同步的临时错误不反复弹提示，已有内容继续显示。收藏操作期间按钮显示进度，成功后直接更新本地收藏和艺人分区；重试耗尽时仅在收藏按钮旁提示，可再次点按重试。登录失效和权限问题仍提示处理。跳曲、开始整张专辑等操作收到不确定的网络结果时不重复发送，避免跳过多首或重新从头播放。
-- 点击封面浏览专辑，点击播放才改变音乐。播放页展示整张专辑的曲目顺序、时长和当前曲目，列表不提供单曲点播。
-- 选择专辑时，封面会轻轻抬起，移到详情页并滑入短暂出现的玻璃托槽，约 0.8 秒落定。返回收藏、搜索结果或艺人页时，封面用 0.32 秒平滑回到原列表中的卡片，无晃动。返回箭头、Esc 与菜单使用同一动画；目标已移除或不在屏幕内时正常返回。调整窗口、切到后台或开启系统“减少动态效果”会结束动画并显示实际封面。
-- 专辑详情只保留一个返回箭头，按浏览路径返回上一页，保留收藏、搜索和艺人页的滚动位置。“收藏专辑／已收藏”按钮放在左侧唱片资料区，位于年份、曲目数、总时长和收听次数下方。
-- 点击详情中的艺人名字或收藏页的艺人分组标题可打开艺人主页，也可从封面的右键菜单进入。主页展示头像和全部专辑，按“已收藏”和“未收藏”分区，区内按发行年份从新到旧排列；收藏操作会同步更新分区。目录自动加载后续页，收藏状态确认后才展示，加载失败可重试。浏览艺人不会改变播放或覆盖原搜索结果。
-- 艺人名称旁显示 Spotify 提供的头像；没有照片时显示人物图标。发行年份、曲目数、专辑总时长和本机收听次数使用统一的系统图标展示。
-- 曲目列表独立占用右侧高度，当前曲目使用浅色高亮和播放状态图标标识；长专辑可滚动浏览，长名称和专辑资料在左栏独立滚动。
-- 多碟专辑按 Spotify 的 `disc_number` 分组，使用“唱片 1 / 唱片 2”等分区标题，同时显示每张唱片的曲目数与时长；滚动时固定当前分区标题。单碟专辑保持简洁列表，不把分碟编号推断为实体黑胶的 A/B 面。
-- Dock 图标使用正在播放专辑的原始封面，暂停时保留，无播放内容时恢复默认图标。播放接口资料不完整时，仍保留其中的封面地址，或按专辑 ID 从收藏中匹配；封面加载失败会在后续播放刷新时重试。
-- Spotify 确认新曲目开始播放后，等待 1 秒，在屏幕右下角显示带专辑封面及“2/13 · 歌曲名”的玻璃提示，背景由同张封面柔化而来，配合均匀深色遮罩和白色文字保证可读性；“增强对比度”会进一步压暗背景，“减少透明度”使用实色底。提示停留 5 秒后自动消失，出现时不抢焦点，窗口在后台或最小化时也可显示。点击提示卡片会恢复主窗口并打开提示中歌曲所属的专辑，不改变播放；缺少完整专辑资料时按该专辑 ID 补全。快速切歌只保留最新曲目，暂停会取消提示，继续同一首不会重复显示。多碟专辑使用整张专辑的序号；资料未齐时以“—”占位，补齐后原位更新。通过本机 Spotify 的播放变化通知触发 API 确认，并在预计曲目结束时提前轮询；Connect 或网络延迟可能影响检测时间。
-- 播放次数是 **本机统计**：专辑每次收听会话累计 30 秒记一次；曲目听满 30 秒（短曲为时长的一半）记一次。暂停、跳转及没有观测到播放的时段不会累加。统计按账号存储，重启不会重复计算已经计数的播放；Spotify API 不提供账号历史播放次数。
-- 专辑封面下方提供播放／暂停、上一首、下一首和音量控制，正在播放的曲目名称和进度也在专辑详情中展示。浏览另一张专辑时，点击播放开始整张专辑。收藏页用于浏览专辑，不设独立播放栏。
-- 播放设备常驻显示，优先选中 Spotify 当前活动设备；没有活动设备时保留上次选择，否则优先选择电脑或首个可控设备。离线或受限设备不会成为默认输出。
-- 顶栏的专辑叠放图标返回收藏；设置通过 Albumer 菜单的“设置…”或 `⌘,` 打开。
-- 点击红色关闭按钮或按 `⌘W` 只关闭主窗口，Albumer 继续在后台更新播放状态、Dock 封面和切歌提示。点击 Dock 图标或右键菜单的“打开 Albumer”可恢复窗口与浏览位置；通过 `⌘Q` 或应用菜单“退出”结束应用。
-- Dock 右键菜单展示当前歌曲、艺人、专辑、发行年份、曲目序号和播放设备，并提供“上一曲／播放或暂停／下一曲”。控制始终针对正在播放的歌曲，不会因为正在浏览其他专辑而开始播放那张专辑；不可用的操作会禁用。
-- `Space` 播放／暂停当前浏览的专辑；`⌘←`、`⌘→` 跳曲；`⌘F` 搜索；`⌘1` 返回收藏；`Esc` 返回；`⌘,` 设置。
-- 图标提供悬停说明与无障碍标签；列表自动滚动遵循 macOS 的“减少动态效果”设置。后台将播放状态轮询降到每 20 秒一次，以更新 Dock 和本机收听记录。
+- 收藏和搜索聚焦专辑及合辑；Spotify 分类为 `single` 的发行版本（包括部分 EP）不进入专辑收藏网格，但其真实播放状态仍可显示。
+- 专辑可按主要艺人分组，按收藏顺序或年份排序；排列切换和返回详情保留浏览位置。封面保持原图，年份及播放标志位于封面外，悬停稍作停留可查看艺人、年份、曲目数和时长。
+- 点击封面浏览详情，点击播放才开始音乐。左栏提供播放控制、进度和专辑资料，右侧展示曲目；多碟发行按 Spotify 的 disc_number 分区，不推断实体黑胶 A/B 面。
+- 点击艺人进入主页，分别展示已收藏和未收藏的专辑；收藏变更立即更新对应分区。
+- 收藏页显示当前播放专辑，详情页标记当前曲目。Spotify 将专辑内歌曲映射到单曲版时，结合播放上下文、曲目 ID、linked_from 及唯一元数据匹配判断所属专辑，避免误用单曲封面或把第 5 首认成第 1 首。未确定的序号显示“—”，不猜测；播放列表中的真实单曲仍按单曲显示。
+- Dock 使用当前专辑封面。右键菜单展示歌曲、艺人、专辑、年份和设备，并提供上一首、播放／暂停、下一首。没有 Dock 悬停或鼠标位置跟踪功能。
+- 确认新歌开始后 1 秒，在右下角显示原始封面、歌曲名和专辑内序号，停留 5 秒。点击可打开对应专辑，不改变播放。提示使用系统材质和语义文字色，不把模糊封面作为背景。
+- 临时断线、超时和服务端故障自动退避重试；限流遵守 Retry-After。对跳曲、整张专辑开始等可能重复执行的命令不盲目重发。后台临时错误不反复弹窗，最终失败可重试。
+- ×／`⌘W` 只关主窗口，继续同步播放；点击 Dock 恢复。`⌘Q` 退出。设置从应用菜单或 `⌘,` 打开。
+- `Space` 播放／暂停当前专辑，`⌘←`／`⌘→` 跳曲，`⌘F` 搜索，`⌘1` 返回收藏，`Esc` 返回。
 
-令牌保存在 macOS Keychain，Client ID 保存在本机偏好设置。收藏和曲目缓存按账号隔离，封面采用 64 MB 内存缓存与约 256 MB 磁盘缓存，封面最长缓存 30 天；曲目缓存每天更新。缓存位于 `~/Library/Caches/app.albumer`，本机收听记录位于 `~/Library/Application Support/Albumer`。退出账号清理该账号的收藏与曲目缓存，保留本机收听记录；重新授权同一账号可继续累计。没有遥测或服务器。
+## 数据与隐私
+
+没有遥测、开发者服务器或自动 AI 上传。令牌在 macOS Keychain 中，Client ID 的设置副本在本机偏好设置中。收藏、曲目、设备选择和图片缓存位于 `~/Library/Caches/app.albumer`，缓存最多保留 7 天，读取或下次启动时清理过期文件。图片内存预算约 64 MB、磁盘预算约 256 MB。
+
+断开连接会删除本地令牌、Client ID、所有账号缓存、图片缓存和旧版收听记录，拒绝旧请求重新写入缓存。旧版 `~/Library/Application Support/Albumer/history` 也在下次非预览启动时迁移删除。可从设置重试清理；若要撤销 Spotify 服务端授权，还需到 [Spotify 账号应用页面](https://www.spotify.com/account/apps/) 移除访问权限。
+
+本版本移除了将 Spotify 收藏导出给 AI 的推荐 Prompt、本机播放次数统计、封面翻转和模糊封面背景。调整依据是 Spotify 对 AI 内容输入、派生收听指标及封面呈现的限制；保留专辑浏览和播放功能。详见 [Spotify Developer Policy](https://developer.spotify.com/policy)、[Developer Terms](https://developer.spotify.com/terms) 和 [Design Guidelines](https://developer.spotify.com/documentation/design)。这些改动不构成 Spotify 审核或发行批准。
+
+## 开源发布准备
+
+原创代码、应用图标、虚构演示数据及几何素材采用 [MIT License](LICENSE)。Spotify 标识和运行时内容不在 MIT 授权范围内，详见 [第三方声明](THIRD_PARTY_NOTICES.md)。
+
+```sh
+make audit     # 扫描当前源码，报告位置，不输出疑似凭据值
+make public    # 生成可审阅的公开仓库、源码 zip 和 Git bundle；不会发布
+```
+
+输出位于 `build/public/Albumer-*/`：
+
+- `Albumer/`：独立 Git 仓库，保留 HEAD 的完整提交祖先及原作者姓名、邮箱、时间、提交信息。
+- 历史中的旧预览目录、下载脚本和截图被剔除；最后追加当前工作区的发布快照，包含原创替代素材。提交 ID 会变化，映射见 `history-map.json`。
+- `Albumer-source.zip`：当前源码快照；`Albumer-public.bundle`：含清理后历史的 Git 离线包。
+
+原仓库和原提交不被改写。公开时使用生成的副本；直接推送原仓库仍会公开旧历史素材。脚本不复制原仓库配置、远程地址、reflog 或被剔除的对象；公开副本仍按作者选择保留姓名和邮箱。不会自动推送、上传或创建远程仓库。
+
+凭据扫描是模式检查，不能证明绝无遗漏，也不授予任何第三方权利。公开源码前应审阅最终副本；发布应用还需确认 Spotify 的接入条件、品牌使用规则，并按需要完成 Developer ID 签名和公证。
 
 ## 开发与验证
 
 ```sh
-./scripts/test.sh        # 核心测试，不需要 Spotify 账号
-./scripts/test.sh --ui   # 再运行原生 XCUITest，需要图形桌面
+./scripts/test.sh        # 核心测试，无 Spotify 账号、无桌面操作
+./scripts/test.sh --ui   # 原生 XCUITest，会启动并操作应用；需显式选择
 ```
 
-核心测试覆盖 PKCE 的 RFC 向量、OAuth 回环回调、取消和 state 校验、单次并发刷新、退出时取消刷新、2026 年收藏接口、专辑过滤与分页、204 空状态、403／404／429、Retry-After、配额熔断、完整专辑播放请求及进度校准。
+核心测试覆盖 OAuth/PKCE、令牌刷新、重试、收藏、设备、播放同步、单曲发行与专辑上下文识别、通知生命周期、账号缓存删除和延迟写入拦截。UI 测试使用虚构预览数据，不能替代真实 Spotify 联调。
 
-原生 UI 测试使用明确的 `--demo` 模式，验证封面墙、专辑播放控制、搜索、空状态、设置、设备、键盘操作、小窗口、缺失封面、长名称及减少动态效果。截图保存在测试结果 `.xcresult` 中。UI fixture 测试不等同于真实 Spotify 音频联调。
-
-真实账号验收需要用户提供自己的 Client ID 并授权：验证音频输出、专辑顺序播放、暂停续播、跳曲／拖动、收藏同步、Connect 切换、重启后恢复登录，以及 Spotify 外部改播后的同步。当前仓库不包含账号凭据。
-
-工程分为 `Core`（模型、OAuth、钥匙串、可注入 HTTP 层）、`AppModel`（界面与播放协调）及 `UI`。网络协议支持替换测试实现；新播放入口只接收 `AlbumID`，不会构造单曲 URI 队列。
-
-新增 Swift 文件后可运行 `python3 scripts/generate-project.py` 更新已提交的 Xcode 工程。图标由 `scripts/make-icon.swift` 生成；预览素材可用 `scripts/fetch-preview-assets.py` 更新，正常构建不需要执行这两个脚本。
-
-## Spotify 资料与素材
-
-实现依据 [PKCE 授权](https://developer.spotify.com/documentation/web-api/tutorials/code-pkce-flow)、[回调地址规则](https://developer.spotify.com/documentation/web-api/concepts/redirect_uri)、[2026 API 迁移说明](https://developer.spotify.com/documentation/web-api/tutorials/february-2026-migration-guide) 和 [配额规则](https://developer.spotify.com/documentation/web-api/concepts/quota-modes)。收藏写入使用新版 `/me/library`，搜索每次最多 10 条，不依赖已移除的用户 `product` 等字段。
-
-Spotify 标识来自其官方品牌素材包，预览封面、艺人照片及曲目显示元数据来自 Spotify 的公开 oEmbed／嵌入页面；其中 Radiohead 头像来自[艺人页面](https://open.spotify.com/artist/4Z8W4fKeB5YxbusRsdQVPb)，版权属于各自权利人。素材仅用于标注来源的应用界面，不包含音频。实际连接账号后的内容通过官方 Web API 获取，封面按 [Spotify 展示规范](https://developer.spotify.com/documentation/design) 保持原样。
-
-界面设计参考 Apple 当前的 [macOS 设计指南](https://developer.apple.com/design/human-interface-guidelines/designing-for-macos)、[工具栏](https://developer.apple.com/design/human-interface-guidelines/toolbars)、[材质](https://developer.apple.com/design/human-interface-guidelines/materials)及[排版](https://developer.apple.com/design/human-interface-guidelines/typography)指南。导航与控件的系统外观由 SwiftUI 和 AppKit 提供。
+工程分为 Core（数据、OAuth、存储与 API）、AppModel（界面和播放协调）及 UI。新增或删除 Swift 文件后运行 `python3 scripts/generate-project.py` 更新已提交的 Xcode 工程；应用图标由 `scripts/make-icon.swift` 生成。

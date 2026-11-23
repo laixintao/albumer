@@ -8,3 +8,22 @@ xcuserdata/
 .swiftpm/
 .env
 
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.mobileprovision
+*.provisionprofile
+*.cer
+*.log
+*.har
+*.dSYM/
+*.zip
+*.dmg
+*.xcarchive/
+Secrets.xcconfig
+*.local.xcconfig
+__pycache__/
+*.pyc

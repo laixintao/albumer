@@ -5,18 +5,9 @@ actor FixtureSpotifyService: SpotifyService {
     static let albums: [Album] = {
         guard let url = Bundle.main.url(forResource: "albums", withExtension: "json", subdirectory: "Fixtures"),
               let data = try? Data(contentsOf: url), let albums = try? JSONDecoder().decode([Album].self, from: data) else { return [] }
-        var result = albums.map { album in
-            let artists = album.artists.map { artist in
-                artist.name == "Radiohead"
-                    ? Artist(name: artist.name, id: "4Z8W4fKeB5YxbusRsdQVPb", images: [SpotifyImage(url: URL(string: "albumer-preview://artist-radiohead")!, width: 320, height: 320)])
-                    : Artist(name: artist.name, id: "preview-artist-" + artist.name)
-            }
-            return Album(id: album.id, name: album.name, artists: artists, albumType: album.albumType,
-                  images: [SpotifyImage(url: URL(string: "albumer-preview://\(album.id)")!, width: 640, height: 640)],
-                  releaseDate: album.releaseDate, totalTracks: album.totalTracks)
-        }
+        var result = albums
         if ProcessInfo.processInfo.arguments.contains("--edge-cases") {
-            result.insert(Album(id: "missing-cover", name: "一张很长名字的专辑 / A Very Long Album Title — Anniversary Edition", artists: [Artist(name: "坂本龍一 / Ryuichi Sakamoto / Various Artists")], albumType: "compilation", images: [], releaseDate: "2026", totalTracks: 24), at: 0)
+            result.insert(Album(id: "missing-cover", name: "一张很长名字的专辑 / A Very Long Album Title — Anniversary Edition", artists: [Artist(name: "Lumen Assembly / Sora Vale / Preview Ensemble")], albumType: "compilation", images: [], releaseDate: "2026", totalTracks: 24), at: 0)
         }
         if ProcessInfo.processInfo.arguments.contains("--many-albums"), !result.isEmpty {
             let originals = result

@@ -1,0 +1,781 @@
+[
+  {
+    "id": "preview-01",
+    "name": "Paper Horizons",
+    "artists": [
+      {
+        "id": "preview-artist-lumen-assembly",
+        "name": "Lumen Assembly",
+        "images": [
+          {
+            "url": "albumer-preview://preview-artist-lumen-assembly",
+            "width": 320,
+            "height": 320
+          }
+        ]
+      }
+    ],
+    "album_type": "album",
+    "images": [
+      {
+        "url": "albumer-preview://preview-01",
+        "width": 320,
+        "height": 320
+      }
+    ],
+    "release_date": "2010-04-12",
+    "total_tracks": 10,
+    "preview_tracks": [
+      {
+        "title": "Passage 01",
+        "duration": 180000
+      },
+      {
+        "title": "Passage 02",
+        "duration": 197000
+      },
+      {
+        "title": "Passage 03",
+        "duration": 214000
+      },
+      {
+        "title": "Passage 04",
+        "duration": 231000
+      },
+      {
+        "title": "Passage 05",
+        "duration": 248000
+      },
+      {
+        "title": "Passage 06",
+        "duration": 265000
+      },
+      {
+        "title": "Passage 07",
+        "duration": 282000
+      },
+      {
+        "title": "Passage 08",
+        "duration": 299000
+      },
+      {
+        "title": "Passage 09",
+        "duration": 196000
+      },
+      {
+        "title": "Passage 10",
+        "duration": 213000
+      }
+    ]
+  },
+  {
+    "id": "preview-02",
+    "name": "Copper Steps",
+    "artists": [
+      {
+        "id": "preview-artist-copper-avenue",
+        "name": "Copper Avenue",
+        "images": [
+          {
+            "url": "albumer-preview://preview-artist-copper-avenue",
+            "width": 320,
+            "height": 320
+          }
+        ]
+      }
+    ],
+    "album_type": "album",
+    "images": [
+      {
+        "url": "albumer-preview://preview-02",
+        "width": 320,
+        "height": 320
+      }
+    ],
+    "release_date": "2011-04-12",
+    "total_tracks": 9,
+    "preview_tracks": [
+      {
+        "title": "Passage 01",
+        "duration": 197000
+      },
+      {
+        "title": "Passage 02",
+        "duration": 214000
+      },
+      {
+        "title": "Passage 03",
+        "duration": 231000
+      },
+      {
+        "title": "Passage 04",
+        "duration": 248000
+      },
+      {
+        "title": "Passage 05",
+        "duration": 265000
+      },
+      {
+        "title": "Passage 06",
+        "duration": 282000
+      },
+      {
+        "title": "Passage 07",
+        "duration": 299000
+      },
+      {
+        "title": "Passage 08",
+        "duration": 196000
+      },
+      {
+        "title": "Passage 09",
+        "duration": 213000
+      }
+    ]
+  },
+  {
+    "id": "preview-03",
+    "name": "Quiet Geometry",
+    "artists": [
+      {
+        "id": "preview-artist-sora-vale",
+        "name": "Sora Vale",
+        "images": [
+          {
+            "url": "albumer-preview://preview-artist-sora-vale",
+            "width": 320,
+            "height": 320
+          }
+        ]
+      }
+    ],
+    "album_type": "album",
+    "images": [
+      {
+        "url": "albumer-preview://preview-03",
+        "width": 320,
+        "height": 320
+      }
+    ],
+    "release_date": "2012-04-12",
+    "total_tracks": 10,
+    "preview_tracks": [
+      {
+        "title": "Passage 01",
+        "duration": 214000
+      },
+      {
+        "title": "Passage 02",
+        "duration": 231000
+      },
+      {
+        "title": "Passage 03",
+        "duration": 248000
+      },
+      {
+        "title": "Passage 04",
+        "duration": 265000
+      },
+      {
+        "title": "Passage 05",
+        "duration": 282000
+      },
+      {
+        "title": "Passage 06",
+        "duration": 299000
+      },
+      {
+        "title": "Passage 07",
+        "duration": 196000
+      },
+      {
+        "title": "Passage 08",
+        "duration": 213000
+      },
+      {
+        "title": "Passage 09",
+        "duration": 230000
+      },
+      {
+        "title": "Passage 10",
+        "duration": 247000
+      }
+    ]
+  },
+  {
+    "id": "preview-04",
+    "name": "Evening Current",
+    "artists": [
+      {
+        "id": "preview-artist-evening-current",
+        "name": "Evening Current",
+        "images": [
+          {
+            "url": "albumer-preview://preview-artist-evening-current",
+            "width": 320,
+            "height": 320
+          }
+        ]
+      }
+    ],
+    "album_type": "album",
+    "images": [
+      {
+        "url": "albumer-preview://preview-04",
+        "width": 320,
+        "height": 320
+      }
+    ],
+    "release_date": "2013-04-12",
+    "total_tracks": 11,
+    "preview_tracks": [
+      {
+        "title": "Passage 01",
+        "duration": 231000
+      },
+      {
+        "title": "Passage 02",
+        "duration": 248000
+      },
+      {
+        "title": "Passage 03",
+        "duration": 265000
+      },
+      {
+        "title": "Passage 04",
+        "duration": 282000
+      },
+      {
+        "title": "Passage 05",
+        "duration": 299000
+      },
+      {
+        "title": "Passage 06",
+        "duration": 196000
+      },
+      {
+        "title": "Passage 07",
+        "duration": 213000
+      },
+      {
+        "title": "Passage 08",
+        "duration": 230000
+      },
+      {
+        "title": "Passage 09",
+        "duration": 247000
+      },
+      {
+        "title": "Passage 10",
+        "duration": 264000
+      },
+      {
+        "title": "Passage 11",
+        "duration": 281000
+      }
+    ]
+  },
+  {
+    "id": "preview-05",
+    "name": "Small Hours",
+    "artists": [
+      {
+        "id": "preview-artist-moss-circuit",
+        "name": "Moss Circuit",
+        "images": [
+          {
+            "url": "albumer-preview://preview-artist-moss-circuit",
+            "width": 320,
+            "height": 320
+          }
+        ]
+      }
+    ],
+    "album_type": "album",
+    "images": [
+      {
+        "url": "albumer-preview://preview-05",
+        "width": 320,
+        "height": 320
+      }
+    ],
+    "release_date": "2014-04-12",
+    "total_tracks": 12,
+    "preview_tracks": [
+      {
+        "title": "Passage 01",
+        "duration": 248000
+      },
+      {
+        "title": "Passage 02",
+        "duration": 265000
+      },
+      {
+        "title": "Passage 03",
+        "duration": 282000
+      },
+      {
+        "title": "Passage 04",
+        "duration": 299000
+      },
+      {
+        "title": "Passage 05",
+        "duration": 196000
+      },
+      {
+        "title": "Passage 06",
+        "duration": 213000
+      },
+      {
+        "title": "Passage 07",
+        "duration": 230000
+      },
+      {
+        "title": "Passage 08",
+        "duration": 247000
+      },
+      {
+        "title": "Passage 09",
+        "duration": 264000
+      },
+      {
+        "title": "Passage 10",
+        "duration": 281000
+      },
+      {
+        "title": "Passage 11",
+        "duration": 298000
+      },
+      {
+        "title": "Passage 12",
+        "duration": 195000
+      }
+    ]
+  },
+  {
+    "id": "preview-06",
+    "name": "North Window",
+    "artists": [
+      {
+        "id": "preview-artist-lumen-assembly",
+        "name": "Lumen Assembly",
+        "images": [
+          {
+            "url": "albumer-preview://preview-artist-lumen-assembly",
+            "width": 320,
+            "height": 320
+          }
+        ]
+      }
+    ],
+    "album_type": "album",
+    "images": [
+      {
+        "url": "albumer-preview://preview-06",
+        "width": 320,
+        "height": 320
+      }
+    ],
+    "release_date": "2015-04-12",
+    "total_tracks": 13,
+    "preview_tracks": [
+      {
+        "title": "Passage 01",
+        "duration": 265000
+      },
+      {
+        "title": "Passage 02",
+        "duration": 282000
+      },
+      {
+        "title": "Passage 03",
+        "duration": 299000
+      },
+      {
+        "title": "Passage 04",
+        "duration": 196000
+      },
+      {
+        "title": "Passage 05",
+        "duration": 213000
+      },
+      {
+        "title": "Passage 06",
+        "duration": 230000
+      },
+      {
+        "title": "Passage 07",
+        "duration": 247000
+      },
+      {
+        "title": "Passage 08",
+        "duration": 264000
+      },
+      {
+        "title": "Passage 09",
+        "duration": 281000
+      },
+      {
+        "title": "Passage 10",
+        "duration": 298000
+      },
+      {
+        "title": "Passage 11",
+        "duration": 195000
+      },
+      {
+        "title": "Passage 12",
+        "duration": 212000
+      },
+      {
+        "title": "Passage 13",
+        "duration": 229000
+      }
+    ]
+  },
+  {
+    "id": "preview-07",
+    "name": "Distant Rooms",
+    "artists": [
+      {
+        "id": "preview-artist-sora-vale",
+        "name": "Sora Vale",
+        "images": [
+          {
+            "url": "albumer-preview://preview-artist-sora-vale",
+            "width": 320,
+            "height": 320
+          }
+        ]
+      }
+    ],
+    "album_type": "album",
+    "images": [
+      {
+        "url": "albumer-preview://preview-07",
+        "width": 320,
+        "height": 320
+      }
+    ],
+    "release_date": "2016-04-12",
+    "total_tracks": 8,
+    "preview_tracks": [
+      {
+        "title": "Passage 01",
+        "duration": 282000
+      },
+      {
+        "title": "Passage 02",
+        "duration": 299000
+      },
+      {
+        "title": "Passage 03",
+        "duration": 196000
+      },
+      {
+        "title": "Passage 04",
+        "duration": 213000
+      },
+      {
+        "title": "Passage 05",
+        "duration": 230000
+      },
+      {
+        "title": "Passage 06",
+        "duration": 247000
+      },
+      {
+        "title": "Passage 07",
+        "duration": 264000
+      },
+      {
+        "title": "Passage 08",
+        "duration": 281000
+      }
+    ]
+  },
+  {
+    "id": "preview-08",
+    "name": "Parallel Garden",
+    "artists": [
+      {
+        "id": "preview-artist-copper-avenue",
+        "name": "Copper Avenue",
+        "images": [
+          {
+            "url": "albumer-preview://preview-artist-copper-avenue",
+            "width": 320,
+            "height": 320
+          }
+        ]
+      }
+    ],
+    "album_type": "album",
+    "images": [
+      {
+        "url": "albumer-preview://preview-08",
+        "width": 320,
+        "height": 320
+      }
+    ],
+    "release_date": "2017-04-12",
+    "total_tracks": 9,
+    "preview_tracks": [
+      {
+        "title": "Passage 01",
+        "duration": 299000
+      },
+      {
+        "title": "Passage 02",
+        "duration": 196000
+      },
+      {
+        "title": "Passage 03",
+        "duration": 213000
+      },
+      {
+        "title": "Passage 04",
+        "duration": 230000
+      },
+      {
+        "title": "Passage 05",
+        "duration": 247000
+      },
+      {
+        "title": "Passage 06",
+        "duration": 264000
+      },
+      {
+        "title": "Passage 07",
+        "duration": 281000
+      },
+      {
+        "title": "Passage 08",
+        "duration": 298000
+      },
+      {
+        "title": "Passage 09",
+        "duration": 195000
+      }
+    ]
+  },
+  {
+    "id": "preview-09",
+    "name": "Open Water",
+    "artists": [
+      {
+        "id": "preview-artist-moss-circuit",
+        "name": "Moss Circuit",
+        "images": [
+          {
+            "url": "albumer-preview://preview-artist-moss-circuit",
+            "width": 320,
+            "height": 320
+          }
+        ]
+      }
+    ],
+    "album_type": "album",
+    "images": [
+      {
+        "url": "albumer-preview://preview-09",
+        "width": 320,
+        "height": 320
+      }
+    ],
+    "release_date": "2018-04-12",
+    "total_tracks": 10,
+    "preview_tracks": [
+      {
+        "title": "Passage 01",
+        "duration": 196000
+      },
+      {
+        "title": "Passage 02",
+        "duration": 213000
+      },
+      {
+        "title": "Passage 03",
+        "duration": 230000
+      },
+      {
+        "title": "Passage 04",
+        "duration": 247000
+      },
+      {
+        "title": "Passage 05",
+        "duration": 264000
+      },
+      {
+        "title": "Passage 06",
+        "duration": 281000
+      },
+      {
+        "title": "Passage 07",
+        "duration": 298000
+      },
+      {
+        "title": "Passage 08",
+        "duration": 195000
+      },
+      {
+        "title": "Passage 09",
+        "duration": 212000
+      },
+      {
+        "title": "Passage 10",
+        "duration": 229000
+      }
+    ]
+  },
+  {
+    "id": "preview-10",
+    "name": "Still Lines",
+    "artists": [
+      {
+        "id": "preview-artist-sora-vale",
+        "name": "Sora Vale",
+        "images": [
+          {
+            "url": "albumer-preview://preview-artist-sora-vale",
+            "width": 320,
+            "height": 320
+          }
+        ]
+      }
+    ],
+    "album_type": "album",
+    "images": [
+      {
+        "url": "albumer-preview://preview-10",
+        "width": 320,
+        "height": 320
+      }
+    ],
+    "release_date": "2019-04-12",
+    "total_tracks": 11,
+    "preview_tracks": [
+      {
+        "title": "Passage 01",
+        "duration": 213000
+      },
+      {
+        "title": "Passage 02",
+        "duration": 230000
+      },
+      {
+        "title": "Passage 03",
+        "duration": 247000
+      },
+      {
+        "title": "Passage 04",
+        "duration": 264000
+      },
+      {
+        "title": "Passage 05",
+        "duration": 281000
+      },
+      {
+        "title": "Passage 06",
+        "duration": 298000
+      },
+      {
+        "title": "Passage 07",
+        "duration": 195000
+      },
+      {
+        "title": "Passage 08",
+        "duration": 212000
+      },
+      {
+        "title": "Passage 09",
+        "duration": 229000
+      },
+      {
+        "title": "Passage 10",
+        "duration": 246000
+      },
+      {
+        "title": "Passage 11",
+        "duration": 263000
+      }
+    ]
+  },
+  {
+    "id": "preview-11",
+    "name": "Field Notes",
+    "artists": [
+      {
+        "id": "preview-artist-lumen-assembly",
+        "name": "Lumen Assembly",
+        "images": [
+          {
+            "url": "albumer-preview://preview-artist-lumen-assembly",
+            "width": 320,
+            "height": 320
+          }
+        ]
+      }
+    ],
+    "album_type": "album",
+    "images": [
+      {
+        "url": "albumer-preview://preview-11",
+        "width": 320,
+        "height": 320
+      }
+    ],
+    "release_date": "2020-04-12",
+    "total_tracks": 12,
+    "preview_tracks": [
+      {
+        "title": "Passage 01",
+        "duration": 230000
+      },
+      {
+        "title": "Passage 02",
+        "duration": 247000
+      },
+      {
+        "title": "Passage 03",
+        "duration": 264000
+      },
+      {
+        "title": "Passage 04",
+        "duration": 281000
+      },
+      {
+        "title": "Passage 05",
+        "duration": 298000
+      },
+      {
+        "title": "Passage 06",
+        "duration": 195000
+      },
+      {
+        "title": "Passage 07",
+        "duration": 212000
+      },
+      {
+        "title": "Passage 08",
+        "duration": 229000
+      },
+      {
+        "title": "Passage 09",
+        "duration": 246000
+      },
+      {
+        "title": "Passage 10",
+        "duration": 263000
+      },
+      {
+        "title": "Passage 11",
+        "duration": 280000
+      },
+      {
+        "title": "Passage 12",
+        "duration": 297000
+      }
+    ]
+  }
+]

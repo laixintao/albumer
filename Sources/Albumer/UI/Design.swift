@@ -21,16 +21,6 @@ extension View {
         }
     }
 
-    /// Clear glass preserves the colors of artwork placed behind the information surface.
-    @ViewBuilder
-    func artworkGlass(cornerRadius: CGFloat = 6) -> some View {
-        if #available(macOS 26.0, *) {
-            glassEffect(.clear.interactive(), in: RoundedRectangle(cornerRadius: cornerRadius))
-        } else {
-            background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius))
-        }
-    }
-
     @ViewBuilder
     func albumButtonStyle(prominent: Bool = false) -> some View {
         if #available(macOS 26.0, *) {
@@ -103,10 +93,10 @@ struct GlyphButton: View {
 
 struct AlbumArtwork: View {
     let album: Album
-    var radius: CGFloat = 6
+    var radius: CGFloat = 0
     @State private var image: NSImage?
 
-    init(album: Album, radius: CGFloat = 6) {
+    init(album: Album, radius: CGFloat = 0) {
         self.album = album
         self.radius = radius
         _image = State(initialValue: ImageStore.shared.cachedImage(for: album))

@@ -16,18 +16,18 @@ struct DockPlaybackInfo {
     let canTogglePlayback: Bool
     let canGoNext: Bool
 
-    init(playback: PlaybackSnapshot?, album: Album?, tracks: [AlbumTrack], connected: Bool, busy: Bool) {
+    init(playback: PlaybackSnapshot?, album: Album?, tracks: [AlbumTrack], connected: Bool, busy: Bool, resolvedAlbumID: AlbumID? = nil) {
         let item = connected ? playback?.item : nil
-        let albumID = item?.albumID ?? playback?.context?.albumID
+        let albumID = resolvedAlbumID ?? PlaybackIdentity.albumID(for: playback)
         let currentAlbum = item == nil ? nil : album.flatMap { $0.albumID == albumID ? $0 : nil }
         isPlaying = item != nil && playback?.isPlaying == true
         status = !connected ? "请连接 Spotify" : (item == nil ? "暂未播放" : (isPlaying ? "正在播放" : "已暂停"))
         track = item?.name
         let names = item?.artists.map(\.name).filter { !$0.isEmpty }.joined(separator: ", ") ?? ""
         artist = item == nil ? nil : (names.isEmpty ? currentAlbum?.artist : names)
-        self.album = item?.albumName ?? currentAlbum?.name
+        self.album = currentAlbum?.name ?? (item?.albumID == albumID ? item?.albumName : nil)
         year = currentAlbum?.releaseYear
-        let announcement = TrackAnnouncement(state: playback, album: currentAlbum, tracks: tracks)
+        let announcement = TrackAnnouncement(state: playback, album: currentAlbum, tracks: tracks, resolvedAlbumID: albumID)
         counter = item == nil || announcement?.position == nil ? nil : announcement?.counter
         device = item == nil ? nil : playback?.device?.name
         deviceSymbol = item == nil ? nil : playback?.device?.symbol

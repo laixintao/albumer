@@ -23,6 +23,7 @@ struct WelcomeView: View {
                     .accessibilityIdentifier("previewButton")
             }
             Text("需要 Spotify Premium").font(.caption).foregroundStyle(.secondary)
+            LegalLinks()
             Spacer()
             SpotifyAttribution().padding(.bottom, 20)
         }
@@ -87,9 +88,20 @@ struct SettingsPanel: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
+                Section {
+                    LegalLinks()
+                    if !connected {
+                        Button("清除本地数据并断开连接", role: .destructive) {
+                            Task { await model.disconnect() }
+                        }
+                    }
+                } footer: {
+                    Text(connected ? "断开连接会删除本地令牌、Client ID 和所有内容缓存。" : "点击连接即表示你已阅读隐私说明并同意使用条款。")
+                }
             }
+            .disabled(model.isDisconnecting)
             .formStyle(.grouped)
-            .frame(height: connected ? 220 : 300)
+            .frame(height: connected ? 320 : 430)
             Divider()
             HStack(spacing: 12) {
                 SpotifyAttribution()
@@ -100,7 +112,7 @@ struct SettingsPanel: View {
                 } else if !connected {
                     Button("连接 Spotify") { model.connect() }
                         .buttonStyle(.borderedProminent)
-                        .disabled(model.clientID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .disabled(model.isDisconnecting || model.clientID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         .keyboardShortcut(.defaultAction)
                 }
                 Button("完成") { dismiss() }

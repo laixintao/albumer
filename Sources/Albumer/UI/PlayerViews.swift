@@ -20,9 +20,8 @@ struct StageView: View {
     }
     private var currentTrackID: String? {
         guard current, let item = model.playback?.item else { return nil }
-        return model.tracks.first {
-            ($0.spotifyID != nil && $0.spotifyID == item.id) || ($0.trackNumber == item.trackNumber && $0.discNumber == item.discNumber)
-        }?.id
+        guard let index = PlaybackIdentity.trackIndex(item, in: model.tracks, albumID: album.albumID) else { return nil }
+        return model.tracks[index].id
     }
 
     var body: some View {
@@ -91,12 +90,11 @@ struct StageView: View {
                             label: "总时长"
                         )
                     }
-                    AlbumDetailLabel(symbol: "play.circle", text: "\(model.history.albums[album.id, default: 0]) 次", label: "本机收听")
-                        .help("本机收听次数：同一专辑收听累计 30 秒记一次，从使用 Albumer 开始统计")
-                        .accessibilityIdentifier("albumPlayCount")
+
                 }
                 .accessibilityIdentifier("albumMetadata")
                 SavedAlbumButton(model: model, album: album)
+                SpotifyAttribution(album: album)
             }
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -173,7 +171,6 @@ struct StageView: View {
 
     private func trackRow(_ track: AlbumTrack, index: Int, multipleDiscs: Bool) -> some View {
         let playing = track.id == currentTrackID
-        let count = model.history.tracks[track.id, default: 0]
         return HStack(spacing: 12) {
             Group {
                 if playing {
@@ -185,10 +182,6 @@ struct StageView: View {
             Text(track.name).font(.body.weight(playing ? .medium : .regular))
                 .lineLimit(1).help(track.name)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            if count > 0 {
-                Text(String(count)).font(.caption).monospacedDigit().foregroundStyle(.secondary)
-                    .help("本机收听 \(count) 次")
-            }
             Text(PlaybackProgress.time(Double(track.durationMS) / 1000))
                 .font(.callout).monospacedDigit().foregroundStyle(.secondary)
                 .frame(width: 44, alignment: .trailing)
@@ -202,7 +195,7 @@ struct StageView: View {
         }
         .id(track.id)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(multipleDiscs ? "唱片 \(track.discNumber)，" : "")\(track.trackNumber). \(track.name)\(playing ? (model.playback?.isPlaying == true ? "，正在播放" : "，已暂停") : "")，\(PlaybackProgress.time(Double(track.durationMS) / 1000))，本机收听 \(count) 次")
+        .accessibilityLabel("\(multipleDiscs ? "唱片 \(track.discNumber)，" : "")\(track.trackNumber). \(track.name)\(playing ? (model.playback?.isPlaying == true ? "，正在播放" : "，已暂停") : "")，\(PlaybackProgress.time(Double(track.durationMS) / 1000))")
         .accessibilityIdentifier("track-\(track.id)")
     }
 }

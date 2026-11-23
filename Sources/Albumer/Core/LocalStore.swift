@@ -12,18 +12,16 @@ struct CachedTracks: Codable, Sendable {
     let updatedAt: Date
 }
 
-struct ListeningHistory: Codable, Sendable {
-    var albums: [String: Int] = [:]
-    var tracks: [String: Int] = [:]
-    var session: ListeningCounter? = nil
-}
-
 actor LocalStore {
     static let shared = LocalStore()
     let cacheRoot: URL
     let dataRoot: URL
     private let artworkBudget: Int
     private var writesSincePrune = 0
+    private var writeGeneration = UUID()
+    static let retention: TimeInterval = 7 * 86400
+
+    func generation() -> UUID { writeGeneration }
 
     init(cacheRoot: URL? = nil, dataRoot: URL? = nil, artworkBudget: Int = 256 * 1024 * 1024) {
         let manager = FileManager.default
@@ -38,8 +36,14 @@ actor LocalStore {
         cacheRoot.appendingPathComponent("accounts", isDirectory: true).appendingPathComponent(Self.key(account), isDirectory: true)
     }
     private func read<T: Decodable>(_ type: T.Type, at url: URL) -> T? {
+        guard isRecent(url) else { try? FileManager.default.removeItem(at: url); return nil }
         guard let data = try? Data(contentsOf: url) else { return nil }
         return try? JSONDecoder().decode(type, from: data)
+    }
+    private func isRecent(_ url: URL, now: Date = .now) -> Bool {
+        guard let values = try? url.resourceValues(forKeys: [.contentModificationDateKey]),
+              let date = values.contentModificationDate else { return false }
+        return now.timeIntervalSince(date) < Self.retention
     }
     private func write<T: Encodable>(_ value: T, to url: URL) {
         do {
@@ -50,29 +54,47 @@ actor LocalStore {
     func library(account: String) -> CachedLibrary? {
         read(CachedLibrary.self, at: accountURL(account).appendingPathComponent("library.json"))
     }
-    func saveLibrary(_ library: CachedLibrary, account: String) {
+    func saveLibrary(_ library: CachedLibrary, account: String, generation: UUID?) {
+        guard generation == writeGeneration else { return }
         write(library, to: accountURL(account).appendingPathComponent("library.json"))
     }
     func tracks(album: String, account: String) -> CachedTracks? {
         read(CachedTracks.self, at: accountURL(account).appendingPathComponent("tracks/\(Self.key(album)).json"))
     }
-    func saveTracks(_ tracks: [AlbumTrack], album: String, account: String) {
+    func saveTracks(_ tracks: [AlbumTrack], album: String, account: String, generation: UUID?) {
+        guard generation == writeGeneration else { return }
         write(CachedTracks(tracks: tracks, updatedAt: .now), to: accountURL(account).appendingPathComponent("tracks/\(Self.key(album)).json"))
-    }
-    func history(account: String) -> ListeningHistory {
-        read(ListeningHistory.self, at: dataRoot.appendingPathComponent("history/\(Self.key(account)).json")) ?? ListeningHistory()
-    }
-    func saveHistory(_ history: ListeningHistory, account: String) {
-        write(history, to: dataRoot.appendingPathComponent("history/\(Self.key(account)).json"))
     }
     func preferredDeviceID(account: String) -> String? {
         read(String.self, at: accountURL(account).appendingPathComponent("device.json"))
     }
-    func savePreferredDeviceID(_ id: String, account: String) {
+    func savePreferredDeviceID(_ id: String, account: String, generation: UUID?) {
+        guard generation == writeGeneration else { return }
         write(id, to: accountURL(account).appendingPathComponent("device.json"))
     }
-    func removeAccountCache(_ account: String) {
-        try? FileManager.default.removeItem(at: accountURL(account))
+    /// Rotate before deleting: a late response from the old session cannot recreate files.
+    func removeUserData() throws {
+        writeGeneration = UUID()
+        var failure: Error?
+        for url in [cacheRoot, dataRoot.appendingPathComponent("history", isDirectory: true)] {
+            do { try removeIfPresent(url) } catch { failure = error }
+        }
+        if let failure { throw failure }
+    }
+    func prepare(now: Date = .now) throws {
+        // Migration from releases which stored derived listening statistics.
+        try removeIfPresent(dataRoot.appendingPathComponent("history", isDirectory: true))
+        if let files = FileManager.default.enumerator(at: cacheRoot, includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey]) {
+            for case let url as URL in files {
+                if (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true, !isRecent(url, now: now) {
+                    try removeIfPresent(url)
+                }
+            }
+        }
+    }
+    private func removeIfPresent(_ url: URL) throws {
+        do { try FileManager.default.removeItem(at: url) }
+        catch let error as CocoaError where error.code == .fileNoSuchFile { }
     }
     private func artworkURL(_ url: URL) -> URL {
         cacheRoot.appendingPathComponent("artwork", isDirectory: true).appendingPathComponent(Self.key(url.absoluteString))
@@ -80,12 +102,13 @@ actor LocalStore {
     func artwork(_ url: URL, now: Date = .now) -> Data? {
         let path = artworkURL(url)
         guard let attributes = try? FileManager.default.attributesOfItem(atPath: path.path),
-              let date = attributes[.modificationDate] as? Date, now.timeIntervalSince(date) < 30 * 86400 else {
+              let date = attributes[.modificationDate] as? Date, now.timeIntervalSince(date) < Self.retention else {
             try? FileManager.default.removeItem(at: path); return nil
         }
         return try? Data(contentsOf: path)
     }
-    func saveArtwork(_ data: Data, url: URL) {
+    func saveArtwork(_ data: Data, url: URL, generation: UUID) {
+        guard generation == writeGeneration else { return }
         guard data.count <= 8 * 1024 * 1024 else { return }
         let path = artworkURL(url)
         do {
@@ -103,7 +126,7 @@ actor LocalStore {
             return (file, values.fileSize ?? 0, values.contentModificationDate ?? .distantPast)
         }.sorted { $0.2 < $1.2 }
         var size = entries.reduce(0) { $0 + $1.1 }
-        for (file, bytes, date) in entries where size > artworkBudget || Date.now.timeIntervalSince(date) > 30 * 86400 {
+        for (file, bytes, date) in entries where size > artworkBudget || Date.now.timeIntervalSince(date) > Self.retention {
             try? FileManager.default.removeItem(at: file); size -= bytes
         }
     }

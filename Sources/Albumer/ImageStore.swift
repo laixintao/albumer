@@ -22,16 +22,19 @@ final class ImageStore {
         return await image(at: url)
     }
     func image(at url: URL) async -> NSImage? {
+        guard !Task.isCancelled else { return nil }
         let key = url.absoluteString
         if let image = cache.object(forKey: key as NSString) { return image }
         if let pending = pending[key] { return await pending.value }
         let generation = generation
         let task = Task<NSImage?, Never> {
             if url.scheme == "albumer-preview", let source = url.host,
-               let url = Bundle.main.url(forResource: source, withExtension: "jpg", subdirectory: "Fixtures") {
+               let url = Bundle.main.url(forResource: source, withExtension: "png", subdirectory: "Fixtures") {
                 return NSImage(contentsOf: url)
             }
             guard url.scheme == "https" else { return nil }
+            let cacheGeneration = await LocalStore.shared.generation()
+            guard !Task.isCancelled else { return nil }
             if let data = await LocalStore.shared.artwork(url), let image = NSImage(data: data) { return image }
             do {
                 var request = URLRequest(url: url)
@@ -39,7 +42,8 @@ final class ImageStore {
                 let (data, response) = try await session.data(for: request)
                 guard (response as? HTTPURLResponse)?.statusCode == 200, data.count <= 8 * 1024 * 1024,
                       let image = NSImage(data: data) else { return nil }
-                await LocalStore.shared.saveArtwork(data, url: url)
+                guard !Task.isCancelled else { return nil }
+                await LocalStore.shared.saveArtwork(data, url: url, generation: cacheGeneration)
                 return image
             } catch { return nil }
         }

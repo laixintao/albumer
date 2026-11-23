@@ -126,11 +126,18 @@ struct AlbumTrack: Codable, Identifiable, Hashable, Sendable {
     let durationMS: Int
     let trackNumber: Int
     let discNumber: Int
+    var linkedFrom: SpotifyTrackReference? = nil
+    var linkedFromID: String? { linkedFrom?.id }
     var id: String { spotifyID ?? "\(discNumber):\(trackNumber)" }
     enum CodingKeys: String, CodingKey {
         case spotifyID = "id", name, artists
         case durationMS = "duration_ms", trackNumber = "track_number", discNumber = "disc_number"
+        case linkedFrom = "linked_from"
     }
+}
+
+struct SpotifyTrackReference: Codable, Hashable, Sendable {
+    let id: String
 }
 
 struct PlaybackDevice: Codable, Identifiable, Hashable, Sendable {
@@ -169,13 +176,16 @@ struct PlaybackTrack: Decodable, Sendable {
     let albumName: String?
     let artwork: URL?
     let albumTotalTracks: Int?
+    let linkedFromID: String?
     enum CodingKeys: String, CodingKey {
         case id, name, artists, album, type
         case durationMS = "duration_ms", trackNumber = "track_number", discNumber = "disc_number"
+        case linkedFrom = "linked_from"
     }
     init(id: String?, name: String, artists: [Artist], durationMS: Int,
          trackNumber: Int?, discNumber: Int?, album: Album?, albumID: AlbumID? = nil, artwork: URL? = nil,
-         albumTotalTracks: Int? = nil, albumName: String? = nil) {
+         albumTotalTracks: Int? = nil, albumName: String? = nil, linkedFromID: String? = nil) {
+        self.linkedFromID = linkedFromID
         self.id = id; self.name = name; self.artists = artists; self.durationMS = durationMS
         self.trackNumber = trackNumber; self.discNumber = discNumber; self.album = album
         self.albumID = album?.albumID ?? albumID
@@ -194,6 +204,7 @@ struct PlaybackTrack: Decodable, Sendable {
         durationMS = try c.decode(Int.self, forKey: .durationMS)
         trackNumber = try c.decodeIfPresent(Int.self, forKey: .trackNumber)
         discNumber = try c.decodeIfPresent(Int.self, forKey: .discNumber)
+        linkedFromID = try c.decodeIfPresent(SpotifyTrackReference.self, forKey: .linkedFrom)?.id
         // Incomplete nested album metadata must not discard the playing track.
         album = try? c.decodeIfPresent(Album.self, forKey: .album)
         enum AlbumReferenceKeys: String, CodingKey { case id, name, uri, images; case totalTracks = "total_tracks" }
