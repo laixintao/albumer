@@ -27,7 +27,8 @@ private actor LibraryService: SpotifyService {
     var playbackFailure: SpotifyError?
     private var holdNextPlayback = false
     private var heldPlayback: (PlaybackSnapshot?, CheckedContinuation<PlaybackSnapshot?, Error>)?
-    var saveDelay: Duration = .zero
+    private var holdNextSave = false
+    private var heldSave: CheckedContinuation<Void, Never>?
     var saveRequests: [Bool] = []
 
     init(_ albums: [Album], delay: Duration = .zero, pageSize: Int = 50) {
@@ -60,7 +61,14 @@ private actor LibraryService: SpotifyService {
         if let trackFailure { throw trackFailure }
         return trackResults
     }
-    func configureSave(failure: SpotifyError? = nil, delay: Duration = .zero) { saveFailure = failure; saveDelay = delay }
+    func configureSave(failure: SpotifyError? = nil) { saveFailure = failure }
+    func holdSaveRequest() { holdNextSave = true }
+    func hasHeldSave() -> Bool { heldSave != nil }
+    func releaseSaveRequest() {
+        let continuation = heldSave
+        heldSave = nil
+        continuation?.resume()
+    }
     func configureSavedCheck(failure: SpotifyError?) { savedCheckFailure = failure }
     func configurePlayback(failure: SpotifyError?) { playbackFailure = failure }
     func isSaved(_ album: AlbumID) async throws -> Bool {
@@ -69,7 +77,10 @@ private actor LibraryService: SpotifyService {
     }
     func setSaved(_ album: AlbumID, saved: Bool) async throws {
         saveRequests.append(saved)
-        if saveDelay != .zero { try await Task.sleep(for: saveDelay) }
+        if holdNextSave {
+            holdNextSave = false
+            await withCheckedContinuation { heldSave = $0 }
+        }
         if let saveFailure { throw saveFailure }
     }
     func setDevices(_ devices: [PlaybackDevice]) { outputs = devices }
@@ -411,14 +422,15 @@ final class AppModelTests: XCTestCase {
     }
     func testSavingShowsPendingStateAndIgnoresRepeatedClicks() async throws {
         let service = LibraryService([])
-        await service.configureSave(delay: .milliseconds(40))
+        await service.holdSaveRequest()
         let model = AppModel(service: service)
         model.checkedSavedIDs.insert("New")
         let task = Task { await model.toggleSaved(album("New")) }
-        try await waitUntil { await service.saveRequests.count == 1 }
+        try await waitUntil { await service.hasHeldSave() }
         XCTAssertTrue(model.isSaving); XCTAssertEqual(model.savingAlbumID, "New")
         XCTAssertFalse(model.savedIDs.contains("New"))
         await model.toggleSaved(album("New"))
+        await service.releaseSaveRequest()
         await task.value
         XCTAssertTrue(model.savedIDs.contains("New")); XCTAssertFalse(model.isSaving)
         let saves = await service.saveRequests
