@@ -83,7 +83,11 @@ private actor LibraryService: SpotifyService {
         state = PlaybackSnapshot(device: outputs.first { $0.id == device }, isPlaying: true,
                                  context: PlaybackContext(type: "album", uri: album.uri), shuffleState: false, repeatState: "off")
     }
-    func command(_ command: PlayerCommand, device: String?) async throws { commandCount += 1 }
+    func command(_ command: PlayerCommand, device: String?) async throws {
+        commandCount += 1
+        if case .pause = command { state?.isPlaying = false }
+        if case .resume = command { state?.isPlaying = true }
+    }
 }
 
 @MainActor
@@ -101,6 +105,82 @@ final class AppModelTests: XCTestCase {
             AlbumTrack(spotifyID: "track-\($0)", name: "Track \($0)", artists: [], durationMS: $0 * 1000,
                        trackNumber: $0, discNumber: 1)
         }
+    }
+    func testDockPauseControlsCurrentPlaybackWithoutStartingBrowsedAlbum() async {
+        let service = LibraryService([])
+        let model = AppModel(service: service)
+        model.connection = .connected
+        let current = album("Current")
+        let browsing = album("Browsing")
+        let state = PlaybackSnapshot(isPlaying: true,
+                                     item: PlaybackTrack(id: "song", name: "Playing Song", artists: [], durationMS: 180000,
+                                                         trackNumber: 1, discNumber: 1, album: current),
+                                     context: PlaybackContext(type: "album", uri: current.albumID.uri))
+        model.playback = state; model.selectedAlbum = browsing
+        await service.setPlayback(state)
+        await model.performDockAction(.togglePlayback)
+        XCTAssertEqual(model.selectedAlbum, browsing)
+        XCTAssertEqual(model.playingAlbumID, current.albumID)
+        XCTAssertEqual(model.playback?.isPlaying, false)
+        let commands = await service.commandCount
+        let starts = await service.playedOn
+        XCTAssertEqual(commands, 1)
+        XCTAssertTrue(starts.isEmpty)
+        model.isBusy = true
+        await model.performDockAction(.next)
+        let blockedCommands = await service.commandCount
+        XCTAssertEqual(blockedCommands, 1)
+    }
+    func testReopeningWindowDoesNotRestartSessionOrReplaceNavigation() async {
+        let model = AppModel(demo: true)
+        let first = await model.startIfNeeded()
+        XCTAssertTrue(first)
+        let browsing = album("Browsing")
+        model.selectedAlbum = browsing
+        model.isSearching = true; model.query = "Artist"; model.searchOffset = 240
+        model.albums = [browsing]
+        let reopened = await model.startIfNeeded()
+        XCTAssertFalse(reopened)
+        XCTAssertEqual(model.selectedAlbum, browsing)
+        XCTAssertEqual(model.query, "Artist"); XCTAssertEqual(model.searchOffset, 240)
+        XCTAssertEqual(model.albums, [browsing])
+        model.setForeground(false)
+    }
+    func testTrackAnnouncementUsesPlayingAlbumAndLoadsDiscMetadataWithoutChangingBrowsing() async throws {
+        let service = LibraryService([])
+        let albumTracks = (1...13).map { number in
+            AlbumTrack(spotifyID: "song-\(number)", name: "Song \(number)", artists: [], durationMS: 180000,
+                       trackNumber: number <= 7 ? number : number - 7, discNumber: number <= 7 ? 1 : 2)
+        }
+        await service.setTracks(albumTracks)
+        var announcements: [TrackAnnouncement] = []
+        var dismissals = 0
+        let controller = TrackAnnouncementController(wait: { delay in
+            if delay == .seconds(1) { await Task.yield() }
+            else { try await Task.sleep(for: delay) }
+        }, present: { announcements.append($0) }, dismiss: { dismissals += 1 })
+        let model = AppModel(service: service, trackAnnouncements: controller)
+        model.connection = .connected
+        model.selectedAlbum = album("Browsing")
+        model.tracks = tracks(count: 1)
+        let item = PlaybackTrack(id: "song-9", name: "Playing Song", artists: [], durationMS: 180000,
+                                 trackNumber: 2, discNumber: 2, album: nil,
+                                 albumID: AlbumID(rawValue: "Playing"), albumTotalTracks: 13)
+        await service.setPlayback(PlaybackSnapshot(isPlaying: true, item: item))
+        await model.refreshPlayback()
+        try await waitUntil { announcements.last?.counter == "9/13" }
+        XCTAssertEqual(announcements.last?.name, "Playing Song")
+        XCTAssertEqual(model.selectedAlbum?.id, "Browsing")
+        XCTAssertEqual(model.tracks.count, 1)
+        await service.setPlayback(PlaybackSnapshot(isPlaying: false, item: item))
+        await model.refreshPlayback()
+        XCTAssertEqual(dismissals, 1)
+        let count = announcements.count
+        await service.setPlayback(PlaybackSnapshot(isPlaying: true, item: item))
+        await model.refreshPlayback()
+        await Task.yield()
+        XCTAssertEqual(announcements.count, count, "Resuming the same song must not show another toast")
+        controller.reset()
     }
     func testRecommendationPromptIncludesRemainingFavoritesWithoutChangingSearchOrScroll() async throws {
         let service = LibraryService([album("One"), album("Two"), album("Three"), album("Four")], pageSize: 2)

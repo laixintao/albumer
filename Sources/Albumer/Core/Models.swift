@@ -167,16 +167,19 @@ struct PlaybackTrack: Decodable, Sendable {
     let album: Album?
     let albumID: AlbumID?
     let artwork: URL?
+    let albumTotalTracks: Int?
     enum CodingKeys: String, CodingKey {
         case id, name, artists, album, type
         case durationMS = "duration_ms", trackNumber = "track_number", discNumber = "disc_number"
     }
     init(id: String?, name: String, artists: [Artist], durationMS: Int,
-         trackNumber: Int?, discNumber: Int?, album: Album?, albumID: AlbumID? = nil, artwork: URL? = nil) {
+         trackNumber: Int?, discNumber: Int?, album: Album?, albumID: AlbumID? = nil, artwork: URL? = nil,
+         albumTotalTracks: Int? = nil) {
         self.id = id; self.name = name; self.artists = artists; self.durationMS = durationMS
         self.trackNumber = trackNumber; self.discNumber = discNumber; self.album = album
         self.albumID = album?.albumID ?? albumID
         self.artwork = album?.artwork ?? artwork
+        self.albumTotalTracks = album?.totalTracks ?? albumTotalTracks
     }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -191,7 +194,7 @@ struct PlaybackTrack: Decodable, Sendable {
         discNumber = try c.decodeIfPresent(Int.self, forKey: .discNumber)
         // Incomplete nested album metadata must not discard the playing track.
         album = try? c.decodeIfPresent(Album.self, forKey: .album)
-        enum AlbumReferenceKeys: String, CodingKey { case id, uri, images }
+        enum AlbumReferenceKeys: String, CodingKey { case id, uri, images; case totalTracks = "total_tracks" }
         let reference = try? c.nestedContainer(keyedBy: AlbumReferenceKeys.self, forKey: .album)
         let id = try? reference?.decode(String.self, forKey: .id)
         let uri = try? reference?.decode(String.self, forKey: .uri)
@@ -199,6 +202,7 @@ struct PlaybackTrack: Decodable, Sendable {
         albumID = album?.albumID ?? id.flatMap { $0.isEmpty ? nil : AlbumID(rawValue: $0) }
             ?? uri.flatMap { AlbumID(spotifyURI: $0) }
         artwork = album?.artwork ?? images.max(by: { ($0.width ?? 0) < ($1.width ?? 0) })?.url
+        albumTotalTracks = album?.totalTracks ?? (try? reference?.decode(Int.self, forKey: .totalTracks))
     }
 }
 

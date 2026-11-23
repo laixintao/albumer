@@ -4,15 +4,24 @@ import AppKit
 @main
 struct AlbumerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
-    @State private var model = AppModel(demo: ProcessInfo.processInfo.arguments.contains("--demo"))
+    @State private var model: AppModel
+
+    init() {
+        let announcements = TrackAnnouncementController(
+            present: { TrackToastPanel.shared.present($0) },
+            dismiss: { TrackToastPanel.shared.dismiss() }
+        )
+        _model = State(initialValue: AppModel(demo: ProcessInfo.processInfo.arguments.contains("--demo"),
+                                             trackAnnouncements: announcements))
+    }
     @AppStorage("groupAlbumsByArtist") private var groupByArtist = false
     @AppStorage("albumSortOrder") private var sortOrder: AlbumSortOrder = .library
     private var playbackMatchesSelection: Bool {
         model.hasPlayback && (model.selectedAlbum == nil || model.playback?.context?.uri == model.selectedAlbum?.albumID.uri)
     }
     var body: some Scene {
-        Window("Albumer", id: "main") {
-            ContentView(model: model)
+        WindowGroup("Albumer", id: "main") {
+            MainWindowContent(model: model, delegate: delegate)
                 .onReceive(NotificationCenter.default.publisher(for: NSWindow.didMiniaturizeNotification)) { _ in model.setForeground(false) }
                 .onReceive(NotificationCenter.default.publisher(for: NSWindow.didDeminiaturizeNotification)) { _ in model.setForeground(true) }
         }
@@ -68,14 +77,124 @@ struct AlbumerApp: App {
     }
 }
 
+private struct MainWindowContent: View {
+    let model: AppModel
+    let delegate: AppDelegate
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        ContentView(model: model)
+            .onAppear {
+                delegate.bind(model, openMainWindow: { openWindow(id: "main") })
+                model.setForeground(true)
+            }
+            .onDisappear { model.setForeground(false) }
+    }
+}
+
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    weak var model: AppModel?
+    private var openMainWindow: (@MainActor () -> Void)?
+    private var openingWindow = false
+
+    func bind(_ model: AppModel, openMainWindow: @escaping @MainActor () -> Void) {
+        self.model = model
+        self.openMainWindow = openMainWindow
+        openingWindow = false
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        DistributedNotificationCenter.default().addObserver(
+            self, selector: #selector(spotifyPlaybackChanged(_:)),
+            name: Notification.Name("com.spotify.client.PlaybackStateChanged"), object: nil,
+            suspensionBehavior: .deliverImmediately
+        )
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
     }
+    @objc private nonisolated func spotifyPlaybackChanged(_ notification: Notification) {
+        let uri = notification.userInfo?["Track ID"] as? String
+        let id = uri.flatMap { $0.hasPrefix("spotify:track:") ? String($0.dropFirst("spotify:track:".count)) : nil }
+        Task { @MainActor [weak self] in self?.model?.spotifyPlaybackDidChange(expectedTrackID: id) }
+    }
+    func applicationWillTerminate(_ notification: Notification) {
+        DistributedNotificationCenter.default().removeObserver(self)
+        TrackToastPanel.shared.dismiss()
+    }
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if !flag { sender.windows.first(where: { $0.canBecomeMain && $0.level == .normal })?.makeKeyAndOrderFront(nil) }
-        return true
+        guard openMainWindow != nil else { return true }
+        // A visible track toast isn't a main window. Dock clicks must also restore minimized windows.
+        showMainWindow()
+        return false
+    }
+
+    @objc private func showMainWindow() {
+        if let window = NSApp.windows.first(where: { $0.canBecomeMain && $0.level == .normal && ($0.isVisible || $0.isMiniaturized) }) {
+            if window.isMiniaturized { window.deminiaturize(nil) }
+            window.makeKeyAndOrderFront(nil)
+        } else if !openingWindow, let openMainWindow {
+            openingWindow = true
+            openMainWindow()
+        }
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        guard let model else { return nil }
+        let info = model.dockPlaybackInfo
+        let menu = NSMenu(title: "Albumer")
+        menu.autoenablesItems = false
+        menu.addItem(.sectionHeader(title: info.status))
+        if let track = info.track {
+            addInformation(info.counter.map { "\($0) · \(track)" } ?? track, symbol: "music.note", to: menu)
+            if let artist = info.artist, !artist.isEmpty { addInformation(artist, symbol: "person.crop.circle", to: menu) }
+            if let album = info.album {
+                addInformation(info.year.map { "\(album) · \($0)" } ?? album, symbol: "opticaldisc", to: menu)
+            }
+            if let device = info.device { addInformation("Spotify · \(device)", symbol: info.deviceSymbol ?? "airplay.audio", to: menu) }
+        }
+        menu.addItem(.separator())
+        addAction("上一曲", symbol: "backward.end.fill", action: #selector(dockPrevious), enabled: info.canGoPrevious, to: menu)
+        addAction(info.isPlaying ? "暂停" : "播放", symbol: info.isPlaying ? "pause.fill" : "play.fill",
+                  action: #selector(dockTogglePlayback), enabled: info.canTogglePlayback, to: menu)
+        addAction("下一曲", symbol: "forward.end.fill", action: #selector(dockNext), enabled: info.canGoNext, to: menu)
+        menu.addItem(.separator())
+        addAction("打开 Albumer", symbol: "macwindow", action: #selector(showMainWindow), enabled: true, to: menu)
+        Task { await model.refreshPlayback() }
+        return menu
+    }
+
+    private func addInformation(_ text: String, symbol: String, to menu: NSMenu) {
+        let title = text.count > 72 ? String(text.prefix(71)) + "…" : text
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        item.toolTip = text
+        item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+        menu.addItem(item)
+    }
+
+    private func addAction(_ title: String, symbol: String, action: Selector, enabled: Bool, to menu: NSMenu) {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        item.isEnabled = enabled
+        item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
+        menu.addItem(item)
+    }
+
+    @objc private func dockPrevious() {
+        guard let model else { return }
+        Task { await model.performDockAction(.previous) }
+    }
+    @objc private func dockTogglePlayback() {
+        guard let model else { return }
+        Task { await model.performDockAction(.togglePlayback) }
+    }
+    @objc private func dockNext() {
+        guard let model else { return }
+        Task { await model.performDockAction(.next) }
     }
 }
 

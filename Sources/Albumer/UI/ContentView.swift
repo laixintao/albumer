@@ -80,7 +80,7 @@ struct ContentView: View {
         .toolbar { toolbar }
         .sheet(isPresented: $model.showSettings) { SettingsPanel(model: model) }
         .task {
-            await model.start()
+            guard await model.startIfNeeded(), !Task.isCancelled else { return }
             if ProcessInfo.processInfo.arguments.contains("--stage"),
                let album = model.playingAlbum.flatMap({ $0.isAllowed ? $0 : nil }) ?? model.albums.first {
                 model.select(album)
