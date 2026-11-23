@@ -1,28 +1,37 @@
 import AppKit
-import SwiftUI
-import CoreImage
+import Observation
 
 @MainActor @Observable
 final class ImageStore {
     static let shared = ImageStore()
     @ObservationIgnored private let cache = NSCache<NSString, NSImage>()
     @ObservationIgnored private var pending: [String: Task<NSImage?, Never>] = [:]
-    @ObservationIgnored private var colors: [String: Color] = [:]
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private let session = URLSession(configuration: .ephemeral)
 
     private init() { cache.totalCostLimit = 64 * 1024 * 1024; cache.countLimit = 100 }
+    func cachedImage(for album: Album) -> NSImage? {
+        guard let url = album.artwork else { return nil }
+        return cachedImage(at: url)
+    }
+    func cachedImage(at url: URL) -> NSImage? {
+        return cache.object(forKey: url.absoluteString as NSString)
+    }
     func image(for album: Album) async -> NSImage? {
-        let key = album.artwork?.absoluteString ?? album.id
+        guard let url = album.artwork else { return nil }
+        return await image(at: url)
+    }
+    func image(at url: URL) async -> NSImage? {
+        let key = url.absoluteString
         if let image = cache.object(forKey: key as NSString) { return image }
         if let pending = pending[key] { return await pending.value }
         let generation = generation
         let task = Task<NSImage?, Never> {
-            if album.artwork?.scheme == "albumer-preview", let source = album.artwork?.host,
+            if url.scheme == "albumer-preview", let source = url.host,
                let url = Bundle.main.url(forResource: source, withExtension: "jpg", subdirectory: "Fixtures") {
                 return NSImage(contentsOf: url)
             }
-            guard let url = album.artwork, url.scheme == "https" else { return nil }
+            guard url.scheme == "https" else { return nil }
             if let data = await LocalStore.shared.artwork(url), let image = NSImage(data: data) { return image }
             do {
                 var request = URLRequest(url: url)
@@ -43,58 +52,73 @@ final class ImageStore {
         }
         return image
     }
-    func color(for album: Album) async -> Color? {
-        if let color = colors[album.id] { return color }
-        let generation = generation
-        guard let image = await image(for: album), let data = image.tiffRepresentation,
-              let bytes = await ArtworkPalette.shared.average(data), generation == self.generation else { return nil }
-        let base = NSColor(srgbRed: Double(bytes[0]) / 255, green: Double(bytes[1]) / 255, blue: Double(bytes[2]) / 255, alpha: 1)
-        let color = Color(nsColor: NSColor(hue: base.hueComponent, saturation: min(0.5, max(0.15, base.saturationComponent)), brightness: max(0.5, base.brightnessComponent), alpha: 1))
-        colors[album.id] = color
-        return color
-    }
     func clear() {
         generation += 1
         pending.values.forEach { $0.cancel() }; pending.removeAll()
-        cache.removeAllObjects(); colors.removeAll()
+        cache.removeAllObjects()
     }
 }
 
 @MainActor
 final class DockArtworkController {
-    static let shared = DockArtworkController()
-    private var original: NSImage?
-    private var task: Task<Void, Never>?
-    private var key: String?
+    static let shared = DockArtworkController(
+        originalIcon: { NSImage(named: NSImage.applicationIconName) ?? NSApp?.applicationIconImage },
+        isAvailable: { NSApp != nil },
+        cachedImage: { ImageStore.shared.cachedImage(at: $0) },
+        loadImage: { await ImageStore.shared.image(at: $0) },
+        applyImage: { NSApp?.applicationIconImage = $0 }
+    )
 
-    func update(_ album: Album?) {
-        guard NSApp != nil else { return }
-        if original == nil { original = NSImage(named: NSImage.applicationIconName) ?? NSApp.applicationIconImage }
-        let nextKey = album.map { $0.id + ($0.artwork?.absoluteString ?? "") }
-        guard key != nextKey else { return }
-        key = nextKey; task?.cancel()
-        guard let album else { NSApp.applicationIconImage = original; return }
-        // Never leave the previous album's cover visible while the next loads.
-        NSApp.applicationIconImage = original
+    private let originalIcon: @MainActor () -> NSImage?
+    private let isAvailable: @MainActor () -> Bool
+    private let cachedImage: @MainActor (URL) -> NSImage?
+    private let loadImage: @MainActor (URL) async -> NSImage?
+    private let applyImage: @MainActor (NSImage?) -> Void
+    private var original: NSImage?
+    private var capturedOriginal = false
+    private var task: Task<Void, Never>?
+    private var requestedURL: URL?
+    private var displayedURL: URL?
+
+    init(originalIcon: @escaping @MainActor () -> NSImage?,
+         isAvailable: @escaping @MainActor () -> Bool = { true },
+         cachedImage: @escaping @MainActor (URL) -> NSImage? = { _ in nil },
+         loadImage: @escaping @MainActor (URL) async -> NSImage?,
+         applyImage: @escaping @MainActor (NSImage?) -> Void) {
+        self.originalIcon = originalIcon
+        self.isAvailable = isAvailable
+        self.cachedImage = cachedImage
+        self.loadImage = loadImage
+        self.applyImage = applyImage
+    }
+
+    func update(_ artworkURL: URL?) {
+        guard isAvailable() else { return }
+        if !capturedOriginal { original = originalIcon(); capturedOriginal = true }
+        let changed = requestedURL != artworkURL
+        if changed {
+            task?.cancel(); task = nil
+            requestedURL = artworkURL
+            displayedURL = nil
+        }
+        guard let artworkURL else { applyImage(original); return }
+        guard displayedURL != artworkURL, task == nil else { return }
+        if let image = cachedImage(artworkURL) {
+            displayedURL = artworkURL
+            applyImage(image)
+            return
+        }
+        // A different album must not leave an unrelated cover visible while its image loads.
+        if changed { applyImage(original) }
         task = Task {
-            let image = await ImageStore.shared.image(for: album)
-            guard !Task.isCancelled, key == nextKey else { return }
-            NSApp.applicationIconImage = image ?? original
+            let image = await loadImage(artworkURL)
+            guard !Task.isCancelled, requestedURL == artworkURL else { return }
+            task = nil
+            // Failed loads remain eligible for the next playback refresh instead of getting stuck.
+            if let image {
+                displayedURL = artworkURL
+                applyImage(image)
+            }
         }
     }
 }
-
-private actor ArtworkPalette {
-    static let shared = ArtworkPalette()
-    private let context = CIContext(options: [.cacheIntermediates: false])
-    func average(_ data: Data) -> [UInt8]? {
-        guard let ci = CIImage(data: data), let filter = CIFilter(name: "CIAreaAverage") else { return nil }
-        filter.setValue(ci, forKey: kCIInputImageKey)
-        filter.setValue(CIVector(cgRect: ci.extent), forKey: kCIInputExtentKey)
-        guard let output = filter.outputImage else { return nil }
-        var bytes = [UInt8](repeating: 0, count: 4)
-        context.render(output, toBitmap: &bytes, rowBytes: 4, bounds: CGRect(x: 0, y: 0, width: 1, height: 1), format: .RGBA8, colorSpace: CGColorSpaceCreateDeviceRGB())
-        return bytes
-    }
-}
-

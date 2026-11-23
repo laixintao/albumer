@@ -1,89 +1,176 @@
 import SwiftUI
 
-/// A generative listening animation. Connect supplies playback state, not PCM
-/// audio, so these curves intentionally make no claim to visualize audio levels.
-struct AlbumHalo: View {
-    var model: AppModel
-    let album: Album
-    var active: Bool
-    @MotionPreference private var reduceMotion
-    @State private var accumulated = 0.0
-    @State private var resumedAt = Date.now
-    private var animating: Bool { active && !reduceMotion }
-
-    var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 30, paused: !animating)) { timeline in
-            let t = accumulated + (animating ? timeline.date.timeIntervalSince(resumedAt) : 0)
-            Canvas { context, size in
-                let center = CGPoint(x: size.width / 2, y: size.height / 2)
-                let radius = min(size.width, size.height) / 2 - 5
-                let progress = albumProgress(at: timeline.date)
-                if active {
-                    for light in 0..<3 {
-                        let angle = t * 0.13 + Double(light) * .pi * 2 / 3
-                        let point = CGPoint(x: center.x + cos(angle) * (radius - 6), y: center.y + sin(angle) * (radius - 6))
-                        let glow = Path(ellipseIn: CGRect(x: point.x - 62, y: point.y - 62, width: 124, height: 124))
-                        context.fill(glow, with: .radialGradient(Gradient(colors: [model.accent.opacity(0.22), model.accent.opacity(0.04), .clear]), center: point, startRadius: 0, endRadius: 62))
-                    }
-                }
-                for ring in 0..<6 {
-                    let r = radius - Double(ring) * 4.5
-                    let bounds = CGRect(x: center.x - r, y: center.y - r, width: r * 2, height: r * 2)
-                    context.stroke(Path(ellipseIn: bounds), with: .color(model.accent.opacity(ring == 0 ? 0.13 : 0.04)), lineWidth: 0.7)
-                    var arc = Path()
-                    let phase = t * (ring.isMultiple(of: 2) ? 3 : -2) + Double(ring) * 63
-                    arc.addArc(center: center, radius: r, startAngle: .degrees(phase), endAngle: .degrees(phase + 42 + Double(ring) * 9), clockwise: false)
-                    var glowContext = context
-                    glowContext.addFilter(.shadow(color: model.accent.opacity(active ? 0.7 : 0), radius: 6))
-                    glowContext.stroke(arc, with: .color(model.accent.opacity(active ? 0.66 - Double(ring) * 0.07 : 0.08)), style: StrokeStyle(lineWidth: ring == 0 ? 1.7 : 0.8, lineCap: .round))
-                }
-                if progress > 0 {
-                    var progressArc = Path()
-                    progressArc.addArc(center: center, radius: radius + 2, startAngle: .degrees(-90), endAngle: .degrees(-90 + progress * 360), clockwise: false)
-                    context.stroke(progressArc, with: .color(Color.paper.opacity(0.32)), style: StrokeStyle(lineWidth: 1.2, lineCap: .round))
-                    let angle = (-90 + progress * 360) * .pi / 180
-                    let dot = CGPoint(x: center.x + cos(angle) * (radius + 2), y: center.y + sin(angle) * (radius + 2))
-                    context.fill(Path(ellipseIn: CGRect(x: dot.x - 2, y: dot.y - 2, width: 4, height: 4)), with: .color(Color.paper.opacity(0.8)))
-                }
-                for i in 0..<56 {
-                    let angle = Double(i) / 56 * .pi * 2
-                    let length = active ? 2 + (sin(t * 0.8 + Double(i) * 0.7) + 1) * 2.5 : 2
-                    var tick = Path()
-                    tick.move(to: CGPoint(x: center.x + cos(angle) * (radius - 31), y: center.y + sin(angle) * (radius - 31)))
-                    tick.addLine(to: CGPoint(x: center.x + cos(angle) * (radius - 31 - length), y: center.y + sin(angle) * (radius - 31 - length)))
-                    context.stroke(tick, with: .color(Color.paper.opacity(0.08)), lineWidth: 0.7)
-                }
-            }
-        }.allowsHitTesting(false).accessibilityHidden(true)
-            .onChange(of: animating) { wasActive, isActive in
-                if wasActive { accumulated += Date.now.timeIntervalSince(resumedAt) }
-                if isActive { resumedAt = .now }
-            }
+/// Resolve visibility from the interpolated angle, so neither face becomes mirrored during a turn.
+struct AlbumCardFace: AnimatableModifier {
+    nonisolated var angle: Double
+    let back: Bool
+    nonisolated var animatableData: Double {
+        get { angle }
+        set { angle = newValue }
     }
-    private func albumProgress(at date: Date) -> Double {
-        guard model.playback?.context?.uri == album.albumID.uri, let item = model.playback?.item else { return 0 }
-        let duration = model.tracks.reduce(0) { $0 + $1.durationMS }
-        guard duration > 0 else { return 0 }
-        let before = model.tracks.prefix { track in
-            track.spotifyID != item.id && !(track.trackNumber == item.trackNumber && track.discNumber == item.discNumber)
-        }.reduce(0) { $0 + $1.durationMS }
-        return min(1, max(0, (Double(before) + (model.playback?.position(at: date) ?? 0) * 1000) / Double(duration)))
+
+    func body(content: Content) -> some View {
+        let normalized = angle.truncatingRemainder(dividingBy: 360)
+        let showsBack = normalized >= 90 && normalized < 270
+        content
+            .opacity(showsBack == back ? 1 : 0)
+            .rotation3DEffect(.degrees(angle + (back ? 180 : 0)), axis: (x: 0, y: 1, z: 0), perspective: 0.08)
     }
 }
 
-struct PlaybackPulse: View {
-    var active: Bool
-    @MotionPreference private var reduceMotion
+/// View-local presentation state: choosing a record must never send a playback command.
+struct AlbumInsertion: Identifiable {
+    static let coordinateSpace = "albumInsertion"
+    let id = UUID()
+    let album: Album
+    let source: CGRect
+}
+
+struct AlbumArtworkDestination {
+    let albumID: String
+    let bounds: Anchor<CGRect>
+}
+
+struct AlbumArtworkDestinationKey: PreferenceKey {
+    static var defaultValue: AlbumArtworkDestination? { nil }
+    static func reduce(value: inout AlbumArtworkDestination?, nextValue: () -> AlbumArtworkDestination?) {
+        value = nextValue() ?? value
+    }
+}
+
+struct AlbumReturnDestinationKey: PreferenceKey {
+    static var defaultValue: [String: [Anchor<CGRect>]] { [:] }
+    static func reduce(value: inout [String: [Anchor<CGRect>]], nextValue: () -> [String: [Anchor<CGRect>]]) {
+        value.merge(nextValue(), uniquingKeysWith: +)
+    }
+}
+
+private struct ReturningAlbumKey: EnvironmentKey {
+    static let defaultValue: String? = nil
+}
+extension EnvironmentValues {
+    var returningAlbumID: String? {
+        get { self[ReturningAlbumKey.self] }
+        set { self[ReturningAlbumKey.self] = newValue }
+    }
+}
+
+/// Give restored scroll positions a moment to settle, then return the cover to its card.
+struct AlbumReturnOverlay: View {
+    let returning: AlbumInsertion
+    let destination: CGRect?
+    let completion: () -> Void
+    @State private var target: CGRect?
+
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 24, paused: !active || reduceMotion)) { timeline in
-            let time = active && !reduceMotion ? timeline.date.timeIntervalSinceReferenceDate : 0
-            Canvas { context, size in
-                for i in 0..<4 {
-                    let height = active ? 4 + (sin(time * 3 + Double(i) * 1.8) + 1) * 5 : 3
-                    let rect = CGRect(x: Double(i) * 4, y: (size.height - height) / 2, width: 2, height: height)
-                    context.fill(Path(roundedRect: rect, cornerRadius: 1), with: .color(Color.paper.opacity(0.8)))
+        let frame = target ?? returning.source
+        AlbumArtwork(album: returning.album)
+            .frame(width: frame.width, height: frame.height)
+            .position(x: frame.midX, y: frame.midY)
+            .task(id: destination) {
+                guard let destination else {
+                    do { try await Task.sleep(for: .milliseconds(200)); try Task.checkCancellation() }
+                    catch { return }
+                    completion()
+                    return
                 }
+                if target != nil { completion(); return }
+                do { try await Task.sleep(for: .milliseconds(80)); try Task.checkCancellation() }
+                catch { return }
+                withAnimation(.smooth(duration: 0.32, extraBounce: 0), completionCriteria: .removed) {
+                    target = destination
+                } completion: { completion() }
             }
-        }.accessibilityHidden(true)
+    }
+}
+
+/// A temporary receiver around the detail artwork; it leaves no player chrome behind.
+struct AlbumInsertionOverlay: View {
+    let insertion: AlbumInsertion
+    let destination: CGRect
+    let completion: () -> Void
+    @State private var phase = Phase.source
+
+    private enum Phase { case source, lifted, aligned, seated, finished }
+
+    private var artworkFrame: CGRect {
+        switch phase {
+        case .source: insertion.source
+        case .lifted: insertion.source.offsetBy(dx: 0, dy: -10)
+        case .aligned: destination.offsetBy(dx: 0, dy: -18)
+        case .seated, .finished: destination
+        }
+    }
+
+    private var tilt: Double {
+        switch phase {
+        case .lifted: -3
+        case .aligned: -1.5
+        default: 0
+        }
+    }
+
+    private var receiverVisible: Bool { phase != .source && phase != .finished }
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color(nsColor: .controlBackgroundColor))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10)
+                        .strokeBorder(.primary.opacity(0.12), lineWidth: 1)
+                }
+                .frame(width: destination.width + 8, height: destination.height + 8)
+                .position(x: destination.midX, y: destination.midY)
+                .opacity(receiverVisible ? 1 : 0)
+
+            AlbumArtwork(album: insertion.album)
+                .frame(width: artworkFrame.width, height: artworkFrame.height)
+                .scaleEffect(phase == .lifted ? 1.035 : 1)
+                .rotationEffect(.degrees(tilt))
+                .position(x: artworkFrame.midX, y: artworkFrame.midY)
+
+            // The cover slips behind this lip as it seats, giving the motion a physical endpoint.
+            Capsule()
+                .fill(.clear)
+                .frame(width: destination.width + 12, height: 14)
+                .controlGlass(cornerRadius: 7)
+                .overlay {
+                    Capsule().strokeBorder(.primary.opacity(0.12), lineWidth: 0.5)
+                }
+                .position(x: destination.midX, y: destination.maxY - 1)
+                .opacity(receiverVisible ? 1 : 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+        .task {
+            do {
+                withAnimation(.easeOut(duration: 0.12)) { phase = .lifted }
+                try await Task.sleep(for: .milliseconds(120))
+                withAnimation(.smooth(duration: 0.36)) { phase = .aligned }
+                try await Task.sleep(for: .milliseconds(360))
+                withAnimation(.spring(duration: 0.22, bounce: 0.08)) { phase = .seated }
+                try await Task.sleep(for: .milliseconds(240))
+                withAnimation(.easeOut(duration: 0.12)) { phase = .finished }
+                try await Task.sleep(for: .milliseconds(120))
+                try Task.checkCancellation()
+                completion()
+            } catch {
+                // Navigating away removes this overlay and cancels its sequence.
+            }
+        }
+        // A resize or scroll invalidates the captured path; reveal the actual cover immediately.
+        .onChange(of: destination) { _, _ in completion() }
+    }
+}
+
+struct PlaybackIndicator: View {
+    var playing: Bool
+    var body: some View {
+        Image(systemName: playing ? "speaker.wave.2.fill" : "pause.fill")
+            .font(.system(size: 11, weight: .regular))
+            .foregroundStyle(Color.accentColor)
+            .accessibilityHidden(true)
     }
 }

@@ -2,28 +2,31 @@ import SwiftUI
 
 struct WelcomeView: View {
     @Bindable var model: AppModel
+
     var body: some View {
-        VStack(spacing: 0) {
+        VStack(spacing: 20) {
             Spacer()
-            ZStack {
-                Circle().stroke(Color.paper.opacity(0.035), lineWidth: 1).frame(width: 260, height: 260)
-                Circle().stroke(Color.paper.opacity(0.045), lineWidth: 1).frame(width: 210, height: 210)
-                SleeveMark(size: 92)
+            Image(systemName: "opticaldisc")
+                .font(.system(size: 64, weight: .regular))
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            VStack(spacing: 8) {
+                Text("Albumer").font(.largeTitle.weight(.semibold))
+                Text("从一张专辑开始听。").font(.body).foregroundStyle(.secondary)
             }
-            Text("Albumer").font(.system(size: 34, weight: .regular)).tracking(-1.2).padding(.top, 4)
-            HStack(spacing: 6) {
-                Image(systemName: "headphones").font(.system(size: 10))
-                Text("Spotify Premium").font(.system(size: 12))
-            }.foregroundStyle(Color.quiet).padding(.top, 12)
-            Button("连接 Spotify") { model.showSettings = true }
-                .buttonStyle(QuietButtonStyle(prominent: true)).padding(.top, 34)
-                .accessibilityIdentifier("connectSpotify")
-            Button("预览界面") { Task { await model.enterDemo() } }
-                .buttonStyle(.plain).font(.system(size: 12)).foregroundStyle(Color.quiet).padding(.top, 18)
-                .accessibilityIdentifier("previewButton")
+            VStack(spacing: 12) {
+                Button("连接 Spotify") { model.showSettings = true }
+                    .buttonStyle(.borderedProminent).controlSize(.large)
+                    .accessibilityIdentifier("connectSpotify")
+                Button("预览界面") { Task { await model.enterDemo() } }
+                    .buttonStyle(.bordered)
+                    .accessibilityIdentifier("previewButton")
+            }
+            Text("需要 Spotify Premium").font(.caption).foregroundStyle(.secondary)
             Spacer()
-            SpotifyAttribution().padding(.bottom, 24)
-        }.frame(maxWidth: .infinity)
+            SpotifyAttribution().padding(.bottom, 20)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -31,107 +34,162 @@ struct SettingsPanel: View {
     @Bindable var model: AppModel
     @Environment(\.dismiss) private var dismiss
     @State private var copied = false
+    private var connected: Bool { model.isConnected && !model.isDemo }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        VStack(spacing: 0) {
             HStack {
-                Text("Spotify").font(.system(size: 23, weight: .medium)).tracking(-0.5)
+                Text("Spotify").font(.title2.weight(.semibold))
                 Spacer()
-                GlyphButton(symbol: "xmark", label: "关闭设置", size: 30) { dismiss() }
-            }.padding(.bottom, 28)
-            if model.isConnected && !model.isDemo {
-                HStack(spacing: 10) {
-                    Circle().fill(Color(red: 0.55, green: 0.69, blue: 0.48)).frame(width: 6, height: 6)
-                    Text("已连接").font(.system(size: 13))
-                    Spacer()
-                    Button("断开连接") { Task { await model.disconnect() } }.buttonStyle(QuietButtonStyle())
-                }
-                Divider().overlay(.white.opacity(0.04)).padding(.vertical, 24)
-                Text("音频由 Spotify 播放。若希望专辑结束后停止，请在 Spotify 中关闭自动播放并清空已有队列。")
-                    .font(.system(size: 12)).foregroundStyle(Color.quiet).lineSpacing(5)
-            } else {
-                Text("Client ID").font(.system(size: 12, weight: .medium)).foregroundStyle(Color.paper.opacity(0.7))
-                TextField("Spotify 应用的 Client ID", text: $model.clientID)
-                    .textFieldStyle(.plain).font(.system(size: 12, design: .monospaced))
-                    .padding(13).background(.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 8))
-                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.white.opacity(0.07)))
-                    .padding(.top, 8).disabled(model.isAuthorizing).accessibilityIdentifier("clientIDField")
-                HStack {
-                    Link("创建 Spotify 应用 ↗", destination: URL(string: "https://developer.spotify.com/dashboard")!)
-                        .font(.system(size: 12)).tint(Color.paper.opacity(0.7))
-                    Spacer()
-                    Text("无需 Client Secret").font(.system(size: 10)).foregroundStyle(Color.quiet)
-                }.padding(.top, 12)
-                Text("Redirect URI").font(.system(size: 12, weight: .medium)).foregroundStyle(Color.paper.opacity(0.7)).padding(.top, 27)
-                HStack {
-                    Text(SpotifyOAuthConfiguration.redirectURI).font(.system(size: 11, design: .monospaced)).textSelection(.enabled)
-                    Spacer()
-                    GlyphButton(symbol: copied ? "checkmark" : "doc.on.doc", label: "复制回调地址", size: 26) {
-                        NSPasteboard.general.clearContents(); NSPasteboard.general.setString(SpotifyOAuthConfiguration.redirectURI, forType: .string)
-                        copied = true
+            }.padding(20)
+            Form {
+                if connected {
+                    Section {
+                        LabeledContent("账号状态") {
+                            Label("已连接", systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(.secondary)
+                        }
+                        Button("断开连接", role: .destructive) { Task { await model.disconnect() } }
+                    } footer: {
+                        Text("音频由 Spotify 播放。若希望专辑结束后停止，请在 Spotify 中关闭自动播放并清空已有队列。")
                     }
-                }.padding(10).background(.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 8)).padding(.top, 8)
-                Text("创建应用时选择 Web API，填入上方回调地址。开发模式需要 Premium，最多 5 位用户；朋友需加入 Users Management 授权名单。")
-                    .font(.system(size: 11)).foregroundStyle(Color.quiet).lineSpacing(4).fixedSize(horizontal: false, vertical: true).padding(.top, 14)
+                } else {
+                    Section {
+                        TextField("Client ID", text: $model.clientID, prompt: Text("Spotify 应用的 Client ID"))
+                            .textFieldStyle(.roundedBorder)
+                            .disabled(model.isAuthorizing)
+                            .accessibilityIdentifier("clientIDField")
+                        LabeledContent("Redirect URI") {
+                            HStack(spacing: 8) {
+                                Text(SpotifyOAuthConfiguration.redirectURI)
+                                    .font(.system(.caption, design: .monospaced))
+                                    .textSelection(.enabled)
+                                GlyphButton(symbol: copied ? "checkmark" : "doc.on.doc", label: "复制回调地址", size: 24) {
+                                    NSPasteboard.general.clearContents()
+                                    NSPasteboard.general.setString(SpotifyOAuthConfiguration.redirectURI, forType: .string)
+                                    copied = true
+                                }
+                            }
+                        }
+                        Link(destination: URL(string: "https://developer.spotify.com/dashboard")!) {
+                            Label("创建 Spotify 应用", systemImage: "arrow.up.right.square")
+                        }
+                    } header: {
+                        Text("连接账号")
+                    } footer: {
+                        Text("创建应用时选择 Web API，并填写上方回调地址。连接只需 Client ID，无需 Client Secret。开发模式最多支持 5 位用户，其他用户需加入 Spotify 应用的授权名单。")
+                    }
+                }
                 if let notice = model.notice {
-                    Text(notice).font(.system(size: 11)).foregroundStyle(Color(red: 0.9, green: 0.66, blue: 0.5)).lineSpacing(3).padding(.top, 14)
-                }
-                HStack {
-                    Spacer()
-                    if model.isAuthorizing {
-                        ProgressView().controlSize(.small)
-                        Button("取消") { model.cancelAuthorization() }.buttonStyle(QuietButtonStyle())
-                    } else {
-                        Button("连接 Spotify") { model.connect() }.buttonStyle(QuietButtonStyle(prominent: true))
-                            .disabled(model.clientID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    Section {
+                        Label(notice, systemImage: "exclamationmark.circle")
+                            .font(.callout)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                }.padding(.top, 26)
+                }
             }
-            HStack {
-                Text("Albumer 1.0").font(.system(size: 10)).foregroundStyle(Color.quiet)
-                Spacer()
+            .formStyle(.grouped)
+            .frame(height: connected ? 220 : 300)
+            Divider()
+            HStack(spacing: 12) {
                 SpotifyAttribution()
-            }.padding(.top, 28)
+                Spacer()
+                if model.isAuthorizing {
+                    ProgressView().controlSize(.small)
+                    Button("取消授权") { model.cancelAuthorization() }
+                } else if !connected {
+                    Button("连接 Spotify") { model.connect() }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(model.clientID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .keyboardShortcut(.defaultAction)
+                }
+                Button("完成") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                    .help("关闭设置")
+                    .accessibilityLabel("关闭设置")
+            }.padding(20)
         }
-        .padding(30).frame(width: 480).background(Color.room).foregroundStyle(Color.paper).preferredColorScheme(.dark)
+        .frame(width: 540)
         .onChange(of: model.showSettings) { _, visible in if !visible { dismiss() } }
         .onDisappear { if model.isAuthorizing { model.cancelAuthorization() } }
     }
 }
 
-struct DevicesPanel: View {
+struct PlaybackDevicesView: View {
     @Bindable var model: AppModel
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack {
-                Text("播放设备").font(.system(size: 15, weight: .medium))
-                Spacer()
-                GlyphButton(symbol: "arrow.clockwise", label: "刷新设备", size: 26) { Task { await model.refreshDevices() } }
-            }
+        HStack(spacing: 8) {
             if model.devices.isEmpty {
-                Text("打开 Spotify 后，在此选择设备。").font(.system(size: 12)).foregroundStyle(Color.quiet)
-            } else {
-                ForEach(Array(model.devices.enumerated()), id: \.offset) { _, device in
-                    Button { Task { await model.chooseDevice(device) } } label: {
-                        HStack(spacing: 13) {
-                            Image(systemName: device.symbol).font(.system(size: 19)).frame(width: 28)
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(device.name).font(.system(size: 12))
-                                if device.isRestricted { Text("设备不支持远程控制").font(.system(size: 10)).foregroundStyle(Color.quiet) }
-                            }
-                            Spacer()
-                            if device.isActive { Image(systemName: "checkmark").font(.system(size: 11)).foregroundStyle(Color.paper.opacity(0.7)) }
-                        }.padding(.vertical, 7).contentShape(Rectangle())
-                    }.buttonStyle(.plain).disabled(device.isRestricted || device.id == nil || model.isBusy)
-                        .accessibilityIdentifier("device-\(device.id ?? "unavailable")")
+                if model.isRefreshingDevices {
+                    ProgressView().controlSize(.mini).accessibilityLabel("正在查找设备")
+                } else {
+                    Image(systemName: "wifi.exclamationmark").foregroundStyle(.secondary)
+                        .help("未发现可用设备，打开 Spotify 后会自动选择")
+                        .accessibilityLabel("未发现可用播放设备")
                 }
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    deviceButtons.fixedSize()
+                    ScrollView(.horizontal) {
+                        deviceButtons
+                    }
+                    .scrollIndicators(.hidden)
+                    .frame(minWidth: 100, maxWidth: 360)
+                    .frame(height: 28)
+                }
+                .fixedSize(horizontal: false, vertical: true)
             }
-            Divider().overlay(.white.opacity(0.05))
-            HStack {
-                Button("打开 Spotify") { model.openSpotify() }.buttonStyle(QuietButtonStyle())
-                Spacer()
-                VolumeControl(model: model)
+            GlyphButton(symbol: "arrow.clockwise", label: "刷新设备", size: 24) { Task { await model.refreshDevices() } }
+                .disabled(model.isRefreshingDevices || model.isBusy)
+                .accessibilityIdentifier("refreshDevices")
+            Divider().frame(height: 20)
+            Button { model.openSpotify() } label: {
+                HStack(spacing: 6) {
+                    SpotifyWordmark(width: 64)
+                    Image(systemName: "arrow.up.right").font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }.padding(.horizontal, 4).frame(height: 28).contentShape(Rectangle())
             }
-        }.padding(24).frame(width: 320).foregroundStyle(Color.paper).background(Color.room).preferredColorScheme(.dark)
+            .buttonStyle(.plain)
+            .help("通过 Spotify 播放 · 打开 Spotify")
+            .accessibilityLabel("通过 Spotify 播放，打开 Spotify")
+            .accessibilityIdentifier("openSpotify")
+        }
+        .padding(.horizontal, 12).padding(.vertical, 6)
+        .controlGlass()
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Spotify 播放设备")
+        .accessibilityIdentifier("playbackDevices")
+    }
+
+    private var deviceButtons: some View {
+        HStack(spacing: 8) {
+            ForEach(Array(model.devices.enumerated()), id: \.offset) { _, device in
+                let selected = device.id != nil && device.id == model.preferredDevice?.id
+                Button { Task { await model.chooseDevice(device) } } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: device.symbol)
+                        Text(device.name).lineLimit(1).frame(maxWidth: 150)
+                        if selected {
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(Color.accentColor)
+                        }
+                    }
+                    .font(.callout)
+                    .foregroundStyle(selected ? .primary : .secondary)
+                    .padding(.horizontal, 6).frame(height: 28)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .disabled(!device.isSelectable || model.isBusy)
+                .help(device.isSelectable ? device.name : "设备不支持远程控制")
+                .accessibilityLabel(device.name)
+                .accessibilityValue(selected ? "已选中" : "未选中")
+                .accessibilityIdentifier("device-\(device.id ?? "unavailable")")
+            }
+        }
     }
 }
 

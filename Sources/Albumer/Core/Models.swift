@@ -3,6 +3,12 @@ import Foundation
 struct AlbumID: RawRepresentable, Hashable, Codable, Sendable {
     let rawValue: String
     init(rawValue: String) { self.rawValue = rawValue }
+    init?(spotifyURI: String) {
+        let components = spotifyURI.split(separator: ":", omittingEmptySubsequences: false)
+        guard components.count == 3, components[0] == "spotify", components[1] == "album",
+              !components[2].isEmpty else { return nil }
+        rawValue = String(components[2])
+    }
     var uri: String { "spotify:album:\(rawValue)" }
 }
 
@@ -14,6 +20,15 @@ struct SpotifyImage: Codable, Hashable, Sendable {
 
 struct Artist: Codable, Hashable, Sendable {
     let name: String
+    let id: String?
+    let images: [SpotifyImage]?
+    init(name: String, id: String? = nil, images: [SpotifyImage]? = nil) {
+        self.name = name; self.id = id; self.images = images
+    }
+    var portrait: URL? {
+        let sorted = (images ?? []).sorted { ($0.width ?? 0) < ($1.width ?? 0) }
+        return (sorted.first { ($0.width ?? 0) >= 80 } ?? sorted.last)?.url
+    }
 }
 
 struct Album: Codable, Identifiable, Hashable, Sendable {
@@ -139,6 +154,7 @@ struct PlaybackDevice: Codable, Identifiable, Hashable, Sendable {
         default: "airplay.audio"
         }
     }
+    var isSelectable: Bool { id?.isEmpty == false && !isRestricted }
 }
 
 struct PlaybackTrack: Decodable, Sendable {
@@ -149,13 +165,51 @@ struct PlaybackTrack: Decodable, Sendable {
     let trackNumber: Int?
     let discNumber: Int?
     let album: Album?
+    let albumID: AlbumID?
+    let artwork: URL?
     enum CodingKeys: String, CodingKey {
-        case id, name, artists, album
+        case id, name, artists, album, type
         case durationMS = "duration_ms", trackNumber = "track_number", discNumber = "disc_number"
+    }
+    init(id: String?, name: String, artists: [Artist], durationMS: Int,
+         trackNumber: Int?, discNumber: Int?, album: Album?, albumID: AlbumID? = nil, artwork: URL? = nil) {
+        self.id = id; self.name = name; self.artists = artists; self.durationMS = durationMS
+        self.trackNumber = trackNumber; self.discNumber = discNumber; self.album = album
+        self.albumID = album?.albumID ?? albumID
+        self.artwork = album?.artwork ?? artwork
+    }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        if let type = try c.decodeIfPresent(String.self, forKey: .type), type != "track" {
+            throw DecodingError.dataCorruptedError(forKey: .type, in: c, debugDescription: "Not a music track")
+        }
+        id = try c.decodeIfPresent(String.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        artists = try c.decodeIfPresent([Artist].self, forKey: .artists) ?? []
+        durationMS = try c.decode(Int.self, forKey: .durationMS)
+        trackNumber = try c.decodeIfPresent(Int.self, forKey: .trackNumber)
+        discNumber = try c.decodeIfPresent(Int.self, forKey: .discNumber)
+        // Incomplete nested album metadata must not discard the playing track.
+        album = try? c.decodeIfPresent(Album.self, forKey: .album)
+        enum AlbumReferenceKeys: String, CodingKey { case id, uri, images }
+        let reference = try? c.nestedContainer(keyedBy: AlbumReferenceKeys.self, forKey: .album)
+        let id = try? reference?.decode(String.self, forKey: .id)
+        let uri = try? reference?.decode(String.self, forKey: .uri)
+        let images = (try? reference?.decode([SpotifyImage].self, forKey: .images)) ?? []
+        albumID = album?.albumID ?? id.flatMap { $0.isEmpty ? nil : AlbumID(rawValue: $0) }
+            ?? uri.flatMap { AlbumID(spotifyURI: $0) }
+        artwork = album?.artwork ?? images.max(by: { ($0.width ?? 0) < ($1.width ?? 0) })?.url
     }
 }
 
-struct PlaybackContext: Decodable, Sendable { let type: String; let uri: String? }
+struct PlaybackContext: Decodable, Sendable {
+    let type: String
+    let uri: String?
+    var albumID: AlbumID? {
+        guard type == "album", let uri else { return nil }
+        return AlbumID(spotifyURI: uri)
+    }
+}
 
 struct PlaybackActions: Decodable, Sendable {
     let disallows: [String: Bool]
@@ -217,6 +271,9 @@ enum PlayerCommand: Sendable {
 }
 
 protocol SpotifyService: Sendable {
+    func artist(_ id: String) async throws -> Artist?
+    func artistAlbums(_ id: String, offset: Int) async throws -> AlbumPage
+    func savedAlbums(_ albums: [AlbumID]) async throws -> [Bool]
     func albumTracks(_ album: AlbumID) async throws -> [AlbumTrack]
     func savedAlbums(offset: Int) async throws -> AlbumPage
     func searchAlbums(query: String, offset: Int) async throws -> AlbumPage
@@ -230,6 +287,13 @@ protocol SpotifyService: Sendable {
 }
 
 extension SpotifyService {
+    func artist(_ id: String) async throws -> Artist? { nil }
+    func artistAlbums(_ id: String, offset: Int) async throws -> AlbumPage { throw SpotifyError.invalidResponse }
+    func savedAlbums(_ albums: [AlbumID]) async throws -> [Bool] {
+        var result: [Bool] = []
+        for album in albums { result.append(try await isSaved(album)) }
+        return result
+    }
     func albumTracks(_ album: AlbumID) async throws -> [AlbumTrack] { [] }
 }
 

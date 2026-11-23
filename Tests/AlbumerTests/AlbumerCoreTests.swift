@@ -80,13 +80,121 @@ final class AlbumerCoreTests: XCTestCase, @unchecked Sendable {
         let compilation = try JSONDecoder().decode(Album.self, from: Data(albumJSON(type: "compilation").utf8))
         XCTAssertTrue(compilation.isAllowed)
     }
+    func testArtistPortraitLoadsFromArtistEndpointAndUsesSmallImage() async throws {
+        let http = MockHTTP([.init(body: """
+        {"id":"artist1","name":"An artist","images":[
+          {"url":"https://images.example/large.jpg","width":640,"height":640},
+          {"url":"https://images.example/small.jpg","width":160,"height":160}
+        ]}
+        """)])
+        let (client, _, _) = try await authorized(http)
+        let artist = try await client.artist("artist1")
+        XCTAssertEqual(artist?.id, "artist1")
+        XCTAssertEqual(artist?.portrait?.absoluteString, "https://images.example/small.jpg")
+        let requests = await http.recorded()
+        XCTAssertEqual(requests.first?.url?.path, "/v1/artists/artist1")
+    }
+    func testArtistAlbumsUsesCurrentPageLimitFiltersSinglesAndRetainsPagination() async throws {
+        let http = MockHTTP([.init(body: """
+        {"items":[\(albumJSON("record")),\(albumJSON("single", type: "single"))],
+         "next":"https://api.spotify.com/v1/artists/artist1/albums?offset=20","offset":10,"total":30}
+        """)])
+        let (client, _, _) = try await authorized(http)
+        let page = try await client.artistAlbums("artist1", offset: 10)
+        XCTAssertEqual(page.albums.map(\.id), ["record"])
+        XCTAssertEqual(page.nextOffset, 20)
+        let requests = await http.recorded()
+        let url = try XCTUnwrap(requests.first?.url)
+        XCTAssertEqual(url.path, "/v1/artists/artist1/albums")
+        let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        XCTAssertTrue(query.contains(URLQueryItem(name: "limit", value: "10")))
+        XCTAssertTrue(query.contains(URLQueryItem(name: "offset", value: "10")))
+        XCTAssertTrue(query.contains(URLQueryItem(name: "include_groups", value: "album,compilation")))
+    }
+    func testBatchSavedAlbumsSplitsAtFortyAndPreservesOrder() async throws {
+        let flags = (0..<40).map { $0.isMultiple(of: 2) }
+        let body = String(data: try JSONEncoder().encode(flags), encoding: .utf8)!
+        let http = MockHTTP([.init(body: body), .init(body: "[true,false]")])
+        let (client, _, _) = try await authorized(http)
+        let ids = (0..<42).map { AlbumID(rawValue: "album-\($0)") }
+        let actual = try await client.savedAlbums(ids)
+        XCTAssertEqual(actual, flags + [true, false])
+        let requests = await http.recorded()
+        XCTAssertEqual(requests.count, 2)
+        for (index, request) in requests.enumerated() {
+            let url = try XCTUnwrap(request.url)
+            XCTAssertEqual(url.path, "/v1/me/library/contains")
+            let uris = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "uris" }?.value
+            XCTAssertEqual(uris?.components(separatedBy: ","), Array(ids.dropFirst(index * 40).prefix(40)).map(\.uri))
+        }
+        let empty = try await client.savedAlbums([])
+        XCTAssertTrue(empty.isEmpty)
+        let count = await http.recorded().count
+        XCTAssertEqual(count, 2)
+    }
+    func testBatchSavedAlbumsRejectsMissingFlagsInsteadOfAssumingUnsaved() async throws {
+        let http = MockHTTP([.init(body: "[true]")])
+        let (client, _, _) = try await authorized(http)
+        do {
+            _ = try await client.savedAlbums([AlbumID(rawValue: "one"), AlbumID(rawValue: "two")])
+            XCTFail("Incomplete flags must not classify unknown albums as unsaved")
+        } catch { XCTAssertEqual(error as? SpotifyError, .invalidResponse) }
+    }
+    func testArtistWithoutPortraitOrLegacyIdentifierStillDecodes() throws {
+        let legacy = try JSONDecoder().decode(Artist.self, from: Data("{\"name\":\"An artist\"}".utf8))
+        XCTAssertNil(legacy.id)
+        XCTAssertNil(legacy.portrait)
+        let noPhoto = try JSONDecoder().decode(Artist.self, from: Data("{\"name\":\"An artist\",\"id\":\"artist1\",\"images\":[]}".utf8))
+        XCTAssertNil(noPhoto.portrait)
+    }
     func testPlaybackNullsAndUnknownContentAreSafe() throws {
         let state = try JSONDecoder().decode(PlaybackSnapshot.self, from: Data("""
-        {"is_playing":true,"progress_ms":null,"context":null,"item":{"type":"episode","name":"Podcast"},"actions":{"disallows":{"skipping_next":true}}}
+        {"is_playing":true,"progress_ms":null,"context":null,"item":{"type":"episode","name":"Podcast","artists":[],"duration_ms":60000},"actions":{"disallows":{"skipping_next":true}}}
         """.utf8))
         XCTAssertNil(state.item); XCTAssertEqual(state.position(), 0); XCTAssertFalse(state.allows("skipping_next"))
         let actions = try JSONDecoder().decode(PlaybackActions.self, from: Data("{\"seeking\":true}".utf8))
         XCTAssertEqual(actions.disallows["seeking"], true)
+    }
+    func testIncompletePlaybackAlbumPreservesTrackAndAlbumReference() throws {
+        let state = try JSONDecoder().decode(PlaybackSnapshot.self, from: Data("""
+        {"is_playing":true,"progress_ms":42000,"context":null,"item":{
+          "type":"track","id":"song1","name":"Playing song","artists":[{"name":"An artist"}],
+          "duration_ms":180000,"track_number":2,"disc_number":1,
+          "album":{"id":"album1","name":"A record","images":[]}
+        }}
+        """.utf8))
+        XCTAssertEqual(state.item?.id, "song1")
+        XCTAssertEqual(state.item?.name, "Playing song")
+        XCTAssertNil(state.item?.album)
+        XCTAssertEqual(state.item?.albumID, AlbumID(rawValue: "album1"))
+        XCTAssertEqual(state.position(at: state.receivedAt), 42)
+    }
+    func testPlaybackAlbumCanBeIdentifiedByURIWithoutFullMetadata() throws {
+        let state = try JSONDecoder().decode(PlaybackSnapshot.self, from: Data("""
+        {"is_playing":true,"item":{"type":"track","name":"Song","duration_ms":180000,
+          "album":{"uri":"spotify:album:album1"}}}
+        """.utf8))
+        XCTAssertEqual(state.item?.albumID, AlbumID(rawValue: "album1"))
+        XCTAssertNil(PlaybackContext(type: "playlist", uri: "spotify:playlist:list1").albumID)
+        XCTAssertNil(PlaybackContext(type: "album", uri: "spotify:album:").albumID)
+    }
+    func testPlaybackKeepsCoverEvenWhenAlbumMetadataIsIncomplete() throws {
+        let state = try JSONDecoder().decode(PlaybackSnapshot.self, from: Data("""
+        {"is_playing":true,"item":{"id":"song","name":"Song","duration_ms":180000,
+          "album":{"id":"album1","images":[
+            {"url":"https://example.test/small.jpg","width":64},
+            {"url":"https://example.test/cover.jpg","width":640}]}}}
+        """.utf8))
+        XCTAssertNil(state.item?.album)
+        XCTAssertEqual(state.item?.albumID, AlbumID(rawValue: "album1"))
+        XCTAssertEqual(state.item?.artwork?.absoluteString, "https://example.test/cover.jpg")
+    }
+    func testInvalidPlaybackImagesDoNotDiscardAlbumIdentity() throws {
+        let state = try JSONDecoder().decode(PlaybackSnapshot.self, from: Data("""
+        {"item":{"name":"Song","duration_ms":180000,"album":{"id":"album1","images":"unavailable"}}}
+        """.utf8))
+        XCTAssertEqual(state.item?.albumID, AlbumID(rawValue: "album1"))
+        XCTAssertNil(state.item?.artwork)
     }
     func testProgressUsesElapsedTimeAndClampsAtDuration() {
         var state = PlaybackSnapshot(isPlaying: true, progressMS: 5000, item: PlaybackTrack(id: "song", name: "song", artists: [], durationMS: 10000, trackNumber: 1, discNumber: 2, album: nil))

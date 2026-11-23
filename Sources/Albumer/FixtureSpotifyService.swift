@@ -6,7 +6,12 @@ actor FixtureSpotifyService: SpotifyService {
         guard let url = Bundle.main.url(forResource: "albums", withExtension: "json", subdirectory: "Fixtures"),
               let data = try? Data(contentsOf: url), let albums = try? JSONDecoder().decode([Album].self, from: data) else { return [] }
         var result = albums.map { album in
-            Album(id: album.id, name: album.name, artists: album.artists, albumType: album.albumType,
+            let artists = album.artists.map { artist in
+                artist.name == "Radiohead"
+                    ? Artist(name: artist.name, id: "4Z8W4fKeB5YxbusRsdQVPb", images: [SpotifyImage(url: URL(string: "albumer-preview://artist-radiohead")!, width: 320, height: 320)])
+                    : Artist(name: artist.name, id: "preview-artist-" + artist.name)
+            }
+            return Album(id: album.id, name: album.name, artists: artists, albumType: album.albumType,
                   images: [SpotifyImage(url: URL(string: "albumer-preview://\(album.id)")!, width: 640, height: 640)],
                   releaseDate: album.releaseDate, totalTracks: album.totalTracks)
         }
@@ -38,6 +43,7 @@ actor FixtureSpotifyService: SpotifyService {
     private var updated = Date.now
     private var volume = 64
     private var deviceID = "preview-mac"
+    private var hasStartedPlayback = !ProcessInfo.processInfo.arguments.contains("--idle-device")
     private var device: PlaybackDevice {
         PlaybackDevice(id: deviceID, name: deviceID == "preview-mac" ? "这台 Mac" : "客厅", type: deviceID == "preview-mac" ? "computer" : "speaker", isActive: true, isRestricted: false, volumePercent: volume, supportsVolume: true)
     }
@@ -49,6 +55,12 @@ actor FixtureSpotifyService: SpotifyService {
         let albums = Self.albums.filter { "\($0.name) \($0.artist)".localizedCaseInsensitiveContains(query) }
         return AlbumPage(albums: Array(albums.dropFirst(offset).prefix(10)), nextOffset: offset + 10 < albums.count ? offset + 10 : nil, total: albums.count)
     }
+    func artistAlbums(_ id: String, offset: Int) async throws -> AlbumPage {
+        let albums = Self.albums.filter { $0.artists.contains { $0.id == id } }
+        return AlbumPage(albums: Array(albums.dropFirst(offset).prefix(10)),
+                         nextOffset: offset + 10 < albums.count ? offset + 10 : nil, total: albums.count)
+    }
+    func savedAlbums(_ albums: [AlbumID]) async throws -> [Bool] { albums.map { saved.contains($0.rawValue) } }
     func isSaved(_ album: AlbumID) async throws -> Bool { saved.contains(album.rawValue) }
     func albumTracks(_ album: AlbumID) async throws -> [AlbumTrack] {
         let metadata = Self.albums.first { $0.albumID == album }
@@ -61,7 +73,7 @@ actor FixtureSpotifyService: SpotifyService {
         if saved { self.saved.insert(album.rawValue) } else { self.saved.remove(album.rawValue) }
     }
     func playback() async throws -> PlaybackSnapshot? {
-        guard !Self.albums.isEmpty else { return nil }
+        guard hasStartedPlayback, !Self.albums.isEmpty else { return nil }
         let album = Self.albums[index]
         let tracks = Self.tracks[album.id] ?? []
         let current = tracks.indices.contains(track - 1) ? tracks[track - 1] : PreviewTrack(title: "预览曲目", duration: 237000)
@@ -71,11 +83,12 @@ actor FixtureSpotifyService: SpotifyService {
             context: PlaybackContext(type: "album", uri: album.albumID.uri), shuffleState: false, repeatState: "off", actions: PlaybackActions(disallows: ["skipping_next": track >= album.totalTracks]))
     }
     func devices() async throws -> [PlaybackDevice] {
-        [PlaybackDevice(id: "preview-mac", name: "这台 Mac", type: "computer", isActive: deviceID == "preview-mac", isRestricted: false, volumePercent: volume, supportsVolume: true),
-         PlaybackDevice(id: "preview-speaker", name: "客厅", type: "speaker", isActive: deviceID == "preview-speaker", isRestricted: false, volumePercent: volume, supportsVolume: true)]
+        [PlaybackDevice(id: "preview-mac", name: "这台 Mac", type: "computer", isActive: hasStartedPlayback && deviceID == "preview-mac", isRestricted: false, volumePercent: volume, supportsVolume: true),
+         PlaybackDevice(id: "preview-speaker", name: "客厅", type: "speaker", isActive: hasStartedPlayback && deviceID == "preview-speaker", isRestricted: false, volumePercent: volume, supportsVolume: true)]
     }
     func transfer(to device: String, play: Bool) async throws { deviceID = device; playing = play; updated = .now }
     func playAlbum(_ album: AlbumID, device: String) async throws {
+        hasStartedPlayback = true
         index = Self.albums.firstIndex { $0.id == album.rawValue } ?? 0
         track = 1; position = 0; playing = true; updated = .now; deviceID = device
     }

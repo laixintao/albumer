@@ -3,12 +3,37 @@ import Foundation
 actor SpotifyClient: SpotifyService {
     let auth: SpotifyAuth
     private let transport: any HTTPTransport
+    private let retry: NetworkRetry
     private var retryAfter: Date?
     private var quotaExceeded = false
-    init(auth: SpotifyAuth, transport: any HTTPTransport = URLSessionTransport()) {
-        self.auth = auth; self.transport = transport
+    init(auth: SpotifyAuth, transport: any HTTPTransport = URLSessionTransport(), retry: NetworkRetry = NetworkRetry()) {
+        self.auth = auth; self.transport = transport; self.retry = retry
     }
     func resetBackoff() { quotaExceeded = false }
+
+    func artist(_ id: String) async throws -> Artist? {
+        try JSONDecoder().decode(Artist.self, from: await request("artists/\(id)"))
+    }
+
+    func artistAlbums(_ id: String, offset: Int) async throws -> AlbumPage {
+        let data = try await request("artists/\(id)/albums", query: [
+            "include_groups": "album,compilation", "limit": "10", "offset": String(offset)
+        ])
+        let page = try JSONDecoder().decode(SpotifyPage<Album>.self, from: data)
+        return AlbumPage(albums: page.items.filter(\.isAllowed), nextOffset: nextOffset(page.next), total: page.total)
+    }
+
+    func savedAlbums(_ albums: [AlbumID]) async throws -> [Bool] {
+        var result: [Bool] = []
+        for start in stride(from: 0, to: albums.count, by: 40) {
+            let batch = albums[start..<min(start + 40, albums.count)]
+            let data = try await request("me/library/contains", query: ["uris": batch.map(\.uri).joined(separator: ",")])
+            let flags = try JSONDecoder().decode([Bool].self, from: data)
+            guard flags.count == batch.count else { throw SpotifyError.invalidResponse }
+            result += flags
+        }
+        return result
+    }
 
     func accountIdentifier() async throws -> String {
         struct Profile: Decodable { let id: String }
@@ -105,21 +130,57 @@ actor SpotifyClient: SpotifyService {
     }
 
     private func request(_ path: String, method: String = "GET", query: [String: String] = [:], body: Data? = nil) async throws -> Data {
-        if quotaExceeded { throw SpotifyError.quotaExceeded }
-        if let retryAfter, retryAfter > .now { throw SpotifyError.rateLimited(seconds: Int(ceil(retryAfter.timeIntervalSinceNow))) }
+        let session = await auth.sessionVersion()
+        // Skip/previous and starting an album may have succeeded before a connection was lost.
+        // Replaying them could skip two tracks or restart the record.
+        let canReplay = method != "POST" && !(path == "me/player/play" && body != nil)
         var url = URLComponents(string: "https://api.spotify.com/v1/\(path)")!
         if !query.isEmpty { url.queryItems = query.sorted(by: { $0.key < $1.key }).map { URLQueryItem(name: $0.key, value: $0.value) } }
         var request = URLRequest(url: url.url!)
         request.httpMethod = method; request.httpBody = body
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        var access = try await auth.accessToken()
-        for attempt in 0...1 {
-            try Task.checkCancellation()
+        var retries = 0
+        var refreshed = false
+        var rejectedAccess: String?
+        var serverWait: TimeInterval = 0
+        while true {
+            try await checkSession(session)
+            if quotaExceeded { throw SpotifyError.quotaExceeded }
+            // All requests share Spotify's cooldown, including requests started while another waits.
+            if let retryAfter {
+                let remaining = retryAfter.timeIntervalSince(retry.now())
+                if remaining > 0 {
+                    guard serverWait + remaining <= retry.maximumServerWait else {
+                        throw SpotifyError.rateLimited(seconds: Int(min(Double(Int.max / 2), ceil(remaining))))
+                    }
+                    serverWait += remaining
+                    try await retry.wait(remaining)
+                    continue
+                }
+            }
+            let access: String
+            do { access = try await auth.accessToken(rejectedToken: rejectedAccess) }
+            catch {
+                try await checkSession(session)
+                guard NetworkRetry.isTransient(error), retries < retry.maxRetries else { throw error }
+                try await retry.wait(retry.backoff(retries)); retries += 1
+                continue
+            }
+            try await checkSession(session)
             request.setValue("Bearer \(access)", forHTTPHeaderField: "Authorization")
-            let (data, response) = try await transport.data(for: request)
+            let data: Data
+            let response: HTTPURLResponse
+            do { (data, response) = try await transport.data(for: request) }
+            catch {
+                try await checkSession(session)
+                guard canReplay, NetworkRetry.isTransient(error), retries < retry.maxRetries else { throw error }
+                try await retry.wait(retry.backoff(retries)); retries += 1
+                continue
+            }
+            try await checkSession(session)
             if (200..<300).contains(response.statusCode) { return data }
             switch response.statusCode {
-            case 401 where attempt == 0: access = try await auth.accessToken(rejectedToken: access); continue
+            case 401 where !refreshed: rejectedAccess = access; refreshed = true; continue
             case 401: throw SpotifyError.signedOut
             case 403: throw SpotifyError.restricted
             case 404:
@@ -130,12 +191,29 @@ actor SpotifyClient: SpotifyService {
                 if (try? JSONDecoder().decode(Reply.self, from: data).error.reason) == "QUOTA_EXCEEDED" {
                     quotaExceeded = true; throw SpotifyError.quotaExceeded
                 }
-                let seconds = max(1, Int(response.value(forHTTPHeaderField: "Retry-After") ?? "5") ?? 5)
-                retryAfter = Date().addingTimeInterval(Double(seconds))
-                throw SpotifyError.rateLimited(seconds: seconds)
-            default: throw SpotifyError.http(response.statusCode, "操作未完成，请重试。")
+                let seconds = NetworkRetry.retryAfter(response, now: retry.now())
+                let deadline = retry.now().addingTimeInterval(seconds)
+                retryAfter = max(retryAfter ?? deadline, deadline)
+                guard retries < retry.maxRetries else {
+                    throw SpotifyError.rateLimited(seconds: Int(min(Double(Int.max / 2), ceil(seconds))))
+                }
+                retries += 1
+                // 429 explicitly rejects the command; even skip/previous can be retried after cooldown.
+                continue
+            default:
+                guard canReplay, NetworkRetry.isTransient(status: response.statusCode), retries < retry.maxRetries else {
+                    throw SpotifyError.http(response.statusCode, "操作未完成，请重试。")
+                }
+                let delay = response.value(forHTTPHeaderField: "Retry-After") == nil
+                    ? retry.backoff(retries) : NetworkRetry.retryAfter(response, now: retry.now())
+                guard delay <= retry.maximumServerWait else { throw SpotifyError.http(response.statusCode, "Spotify 暂时繁忙。") }
+                try await retry.wait(delay); retries += 1
             }
         }
-        throw SpotifyError.signedOut
+    }
+
+    private func checkSession(_ version: Int) async throws {
+        try Task.checkCancellation()
+        guard await auth.sessionVersion() == version else { throw CancellationError() }
     }
 }

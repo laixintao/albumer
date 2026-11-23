@@ -41,12 +41,23 @@ final class AlbumerUITests: XCTestCase {
     }
     func testCollectionStageAndTransport() {
         XCTAssertFalse(app.staticTexts["albumer"].exists)
-        XCTAssertFalse(app.staticTexts["In Rainbows"].exists)
+        XCTAssertFalse(app.buttons["playPause"].exists, "The collection must not contain a separate player")
+        XCTAssertFalse(app.sliders["playbackProgress"].exists)
         XCTAssertFalse(app.buttons["下一页"].exists)
         capture("01-collection")
         app.buttons["album-5vkqYmiPBYLaalcmjujWxK"].click()
         XCTAssertTrue(app.buttons["backToCollection"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["collectionButton"].exists, "Album details need only one back button")
+        XCTAssertFalse(app.toolbars.buttons["saveAlbum"].exists)
+        XCTAssertTrue(app.scrollViews["albumDetails"].buttons["saveAlbum"].exists)
         XCTAssertTrue(app.staticTexts["In Rainbows"].exists)
+        let lastTrack = app.staticTexts["track-5vkqYmiPBYLaalcmjujWxK-10"]
+        XCTAssertTrue(lastTrack.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.scrollViews["albumTracks"].frame.contains(lastTrack.frame), "A ten-track album should fit without scrolling at the default window size")
+        XCTAssertEqual(app.buttons["backToCollection"].frame.midY, app.buttons["searchButton"].frame.midY, accuracy: 1)
+        let play = app.buttons["playPause"]
+        XCTAssertTrue(app.scrollViews["albumDetails"].frame.contains(play.frame), "Playback belongs with the album details")
+        XCTAssertLessThan(play.frame.midY, app.windows.firstMatch.frame.minY + app.windows.firstMatch.frame.height * 0.6)
         app.buttons["playPause"].click()
         XCTAssertTrue(app.buttons["暂停"].waitForExistence(timeout: 4))
         capture("02-stage")
@@ -57,6 +68,14 @@ final class AlbumerUITests: XCTestCase {
         XCTAssertFalse(app.buttons["Bodysnatchers"].exists)
         app.buttons["backToCollection"].click()
         XCTAssertTrue(app.buttons["album-5vkqYmiPBYLaalcmjujWxK"].exists)
+        XCTAssertFalse(app.buttons["playPause"].exists)
+        let currentAlbum = app.buttons["currentAlbum"]
+        XCTAssertTrue(currentAlbum.waitForExistence(timeout: 3))
+        XCTAssertTrue(currentAlbum.label.contains("In Rainbows"))
+        XCTAssertTrue(currentAlbum.label.contains("正在播放"))
+        XCTAssertTrue(app.buttons["album-5vkqYmiPBYLaalcmjujWxK"].label.contains("正在播放"))
+        currentAlbum.click()
+        XCTAssertTrue(app.buttons["暂停"].waitForExistence(timeout: 3), "Opening the current album must preserve playback")
     }
     func testAlbumSearchAndEmptyState() {
         app.buttons["searchButton"].click()
@@ -65,6 +84,11 @@ final class AlbumerUITests: XCTestCase {
         enterSearch("Radiohead", into: field)
         XCTAssertTrue(app.buttons["album-5vkqYmiPBYLaalcmjujWxK"].waitForExistence(timeout: 5))
         capture("03-search")
+        app.buttons["album-5vkqYmiPBYLaalcmjujWxK"].click()
+        XCTAssertTrue(app.buttons["backToCollection"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["collectionButton"].exists)
+        app.buttons["backToCollection"].click()
+        XCTAssertEqual(field.value as? String, "Radiohead", "Back should preserve the search that opened the album")
         enterSearch("A Moon", into: field)
         XCTAssertEqual(field.value as? String, "A Moon")
         XCTAssertTrue(app.buttons["album-2ix8vWvvSp2Yo7rKMiWpkg"].waitForExistence(timeout: 5))
@@ -75,13 +99,20 @@ final class AlbumerUITests: XCTestCase {
     func testSettingsAndDevices() {
         app.buttons["refreshCollection"].click()
         XCTAssertTrue(app.buttons["album-5vkqYmiPBYLaalcmjujWxK"].waitForExistence(timeout: 3))
-        app.buttons["settingsButton"].click()
+        XCTAssertFalse(app.buttons["settingsButton"].exists)
+        XCTAssertFalse(app.buttons["devicesButton"].exists)
+        app.activate()
+        app.menuBars.menuBarItems["Albumer"].click()
+        app.menuItems["设置…"].click()
         XCTAssertTrue(app.textFields["clientIDField"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["http://127.0.0.1:8888/callback"].exists)
         capture("05-settings")
         app.buttons["关闭设置"].click()
-        app.buttons["devicesButton"].click()
-        XCTAssertTrue(app.staticTexts["播放设备"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["openSpotify"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["openSpotify"].label.contains("通过 Spotify 播放"))
+        XCTAssertFalse(app.staticTexts["播放设备"].exists)
+        XCTAssertFalse(app.staticTexts["打开 Spotify"].exists)
+        XCTAssertEqual(app.buttons["device-preview-mac"].value as? String, "已选中")
         capture("06-devices")
     }
     func testCompactWindowAndKeyboardPlayback() {
@@ -97,6 +128,8 @@ final class AlbumerUITests: XCTestCase {
         let play = app.buttons["playPause"]
         XCTAssertTrue(window.frame.contains(play.frame))
         XCTAssertTrue(play.isHittable)
+        XCTAssertTrue(app.buttons["device-preview-mac"].isHittable)
+        XCTAssertTrue(window.frame.contains(app.buttons["device-preview-mac"].frame))
         capture("08-compact-stage")
         app.typeKey(.space, modifierFlags: [])
         XCTAssertTrue(app.buttons["暂停"].waitForExistence(timeout: 4))
@@ -119,12 +152,29 @@ final class AlbumerUITests: XCTestCase {
         XCTAssertTrue(app.buttons["backToCollection"].waitForExistence(timeout: 3))
         app.buttons["playPause"].click()
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "identifier == %@ AND value CONTAINS %@", "track-4m2880jivSbbyEGAKfITCa-1", "正在播放")).firstMatch.waitForExistence(timeout: 5))
-        app.buttons["devicesButton"].click()
         let speaker = app.buttons["device-preview-speaker"]
         XCTAssertTrue(speaker.waitForExistence(timeout: 3))
         speaker.click()
-        XCTAssertTrue(app.buttons["客厅"].waitForExistence(timeout: 5))
+        let selected = NSPredicate(format: "value == %@", "已选中")
+        expectation(for: selected, evaluatedWith: speaker)
+        waitForExpectations(timeout: 5)
+        XCTAssertEqual(app.buttons["device-preview-mac"].value as? String, "未选中")
         capture("10-album-device-switch")
+    }
+    func testIdleDeviceIsSelectedAndFirstPlayNeedsNoPicker() {
+        app.terminate()
+        app.launchArguments = ["--demo", "--idle-device", "--window-size=1120x800"]
+        app.launch()
+        let computer = app.buttons["device-preview-mac"]
+        XCTAssertTrue(computer.waitForExistence(timeout: 5))
+        XCTAssertEqual(computer.value as? String, "已选中")
+        app.buttons["album-5vkqYmiPBYLaalcmjujWxK"].click()
+        XCTAssertTrue(app.buttons["backToCollection"].waitForExistence(timeout: 3))
+        XCTAssertEqual(computer.value as? String, "已选中")
+        app.buttons["playPause"].click()
+        XCTAssertTrue(app.buttons["暂停"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.popovers.count, 0)
+        capture("12-idle-device-first-play")
     }
     func testCoverOnlyInfiniteScrollingAndReturnPosition() {
         app.terminate()

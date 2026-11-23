@@ -1,23 +1,15 @@
 import SwiftUI
 
-private enum PlayerType {
-    static func title(compact: Bool) -> Font { .custom("HelveticaNeue-Medium", size: compact ? 28 : 34) }
-    static let artist = Font.custom("HelveticaNeue", size: 14)
-    static let edition = Font.custom("HelveticaNeue", size: 12)
-    static let track = Font.custom("HelveticaNeue", size: 14)
-    static let activeTrack = Font.custom("HelveticaNeue-Medium", size: 14)
-    static let number = Font.custom("HelveticaNeue", size: 12)
-    static let secondaryNumber = Font.custom("HelveticaNeue", size: 11)
-}
-
 struct StageView: View {
     @Bindable var model: AppModel
     let album: Album
-    @State private var revealed = false
-    @Namespace private var currentRow
+    var inserting = false
+    var artworkFrameChanged: (CGRect) -> Void = { _ in }
     @MotionPreference private var reduceMotion
-    private var current: Bool { model.playback?.context?.uri == album.albumID.uri }
-    private var moving: Bool { current && model.playback?.isPlaying == true && model.isForeground }
+
+    private var current: Bool {
+        model.playingAlbumID == album.albumID
+    }
     private var heading: (title: String, edition: String?) {
         let name = album.name
         guard name.hasSuffix(")"), let suffix = name.range(of: " (", options: .backwards) else { return (name, nil) }
@@ -28,145 +20,231 @@ struct StageView: View {
     }
     private var currentTrackID: String? {
         guard current, let item = model.playback?.item else { return nil }
-        return model.tracks.first { $0.spotifyID == item.id || ($0.trackNumber == item.trackNumber && $0.discNumber == item.discNumber) }?.id
+        return model.tracks.first {
+            ($0.spotifyID != nil && $0.spotifyID == item.id) || ($0.trackNumber == item.trackNumber && $0.discNumber == item.discNumber)
+        }?.id
     }
 
     var body: some View {
         GeometryReader { geometry in
-            let compact = geometry.size.width < 980 || geometry.size.height < 590
-            let artSize = min(380, max(200, geometry.size.height - 245), (geometry.size.width - 116) * 0.49 - 64)
-            VStack(spacing: 8) {
-                HStack(spacing: 16) {
-                    GlyphButton(symbol: "arrow.left", label: "返回专辑") { model.selectedAlbum = nil }
-                        .accessibilityIdentifier("backToCollection")
-                    Spacer()
-                    HStack(spacing: 6) {
-                        Image(systemName: "play.circle").font(.system(size: 12))
-                        Text(String(model.history.albums[album.id, default: 0])).font(PlayerType.number).contentTransition(.numericText())
-                    }.foregroundStyle(Color.quiet)
-                        .help("本机收听次数：同一专辑收听累计 30 秒记一次，从使用 Albumer 开始统计")
-                        .accessibilityLabel("本机收听 \(model.history.albums[album.id, default: 0]) 次")
-                        .accessibilityIdentifier("albumPlayCount")
-                    GlyphButton(symbol: model.savedIDs.contains(album.id) ? "checkmark.circle.fill" : "plus.circle", label: model.savedIDs.contains(album.id) ? "移除收藏" : "收藏专辑", active: model.savedIDs.contains(album.id)) {
-                        Task { await model.toggleSaved(album) }
-                    }.disabled(model.isSaving || !model.checkedSavedIDs.contains(album.id)).accessibilityIdentifier("saveAlbum")
-                }.padding(.horizontal, 22)
-                HStack(spacing: compact ? 30 : 48) {
-                    VStack(spacing: 0) {
-                        Spacer(minLength: 0)
-                        ZStack {
-                            AlbumHalo(model: model, album: album, active: moving)
-                                .frame(width: artSize + 86, height: artSize + 86)
-                            AlbumArtwork(album: album, radius: 5).frame(width: artSize, height: artSize)
-                                .shadow(color: .black.opacity(0.55), radius: 28, y: 16)
-                        }.frame(width: artSize + 64, height: artSize + 64)
-                        if current {
-                            PlaybackProgress(model: model).frame(width: artSize).padding(.top, 7)
-                        } else {
-                            Capsule().fill(Color.paper.opacity(0.08)).frame(width: artSize, height: 2).padding(.top, 24).padding(.bottom, 14)
-                        }
-                        HStack(spacing: 32) {
-                            GlyphButton(symbol: "backward.end.fill", label: "上一首", size: 36) { Task { await model.perform(.previous) } }
-                                .disabled(!current || model.isBusy || model.playback?.allows("skipping_prev") == false)
-                            PlayButton(playing: current && model.playback?.isPlaying == true, busy: model.isBusy, size: 54) {
-                                Task { await model.play(album) }
-                            }.disabled(album.restrictions != nil || (current && model.playback?.allows(model.playback?.isPlaying == true ? "pausing" : "resuming") == false))
-                            GlyphButton(symbol: "forward.end.fill", label: "下一首", size: 36) { Task { await model.perform(.next) } }
-                                .disabled(!current || model.isBusy || model.playback?.allows("skipping_next") == false)
-                        }.padding(.top, 14)
-                        Spacer(minLength: 0)
-                    }.frame(maxWidth: .infinity)
-                    VStack(alignment: .leading, spacing: 0) {
-                        Text(heading.title).font(PlayerType.title(compact: compact)).tracking(compact ? -0.55 : -0.8)
-                            .lineSpacing(3).lineLimit(3).fixedSize(horizontal: false, vertical: true).help(album.name)
-                        if let edition = heading.edition {
-                            Text(edition).font(PlayerType.edition).tracking(0.2)
-                                .foregroundStyle(Color.paper.opacity(0.55)).lineLimit(2).padding(.top, 8)
-                        }
-                        Text(album.artist).font(PlayerType.artist).tracking(0.1)
-                            .foregroundStyle(Color.paper.opacity(0.72)).lineLimit(2).padding(.top, 14)
-                        HStack(spacing: 16) {
-                            Text(album.year)
-                            Rectangle().fill(Color.paper.opacity(0.16)).frame(width: 1, height: 10)
-                            HStack(spacing: 6) {
-                                Image(systemName: "music.note.list").font(.system(size: 10, weight: .regular)).opacity(0.8)
-                                Text(String(album.totalTracks))
-                            }.accessibilityElement(children: .ignore).accessibilityLabel("\(album.totalTracks) 首曲目")
-                            if !model.tracks.isEmpty {
-                                Rectangle().fill(Color.paper.opacity(0.16)).frame(width: 1, height: 10)
-                                HStack(spacing: 6) {
-                                    Image(systemName: "clock").font(.system(size: 10, weight: .regular)).opacity(0.8)
-                                    Text(PlaybackProgress.time(Double(model.tracks.reduce(0) { $0 + $1.durationMS }) / 1000))
-                                }
-                            }
-                        }.font(PlayerType.number).monospacedDigit().tracking(0.15)
-                            .foregroundStyle(Color.paper.opacity(0.58)).padding(.top, 18)
-                        Rectangle().fill(Color.paper.opacity(0.075)).frame(height: 1).padding(.top, 25).padding(.bottom, 12)
-                        trackList
-                    }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                        .padding(.top, compact ? 16 : 38).padding(.bottom, 12)
-                        .opacity(revealed ? 1 : 0).offset(x: revealed || reduceMotion ? 0 : 14)
-                }.padding(.horizontal, compact ? 32 : 44).padding(.bottom, 12)
-            }
-            .onContinuousHover { phase in
-                switch phase {
-                case .active(let point): model.lightPosition = UnitPoint(x: 0.3 + point.x / geometry.size.width * 0.4, y: 0.25 + point.y / geometry.size.height * 0.4)
-                case .ended: model.lightPosition = .center
+            HStack(spacing: 0) {
+                albumDetails
+                    .frame(width: min(320, max(264, geometry.size.width * 0.28)))
+                Divider()
+                VStack(spacing: 0) {
+                    PlaybackDevicesView(model: model)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                        .padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 14)
+                    trackHeader
+                    Divider().padding(.horizontal, 20)
+                    trackList
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .onAppear { withAnimation(reduceMotion ? nil : .spring(response: 0.65, dampingFraction: 0.86)) { revealed = true } }
+    }
+
+    private var albumDetails: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                AlbumArtwork(album: album)
+                    .opacity(inserting ? 0 : 1)
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(AlbumInsertion.coordinateSpace)) } action: {
+                        artworkFrameChanged($0)
+                    }
+                    .anchorPreference(key: AlbumArtworkDestinationKey.self, value: .bounds) {
+                        AlbumArtworkDestination(albumID: album.id, bounds: $0)
+                    }
+                AlbumPlaybackControls(model: model, album: album)
+                if current, let track = model.playback?.item {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 8) {
+                            PlaybackIndicator(playing: model.playback?.isPlaying == true)
+                            Text(track.name).font(.callout).lineLimit(2).help(track.name)
+                        }
+                        PlaybackProgress(model: model)
+                    }
+                    .accessibilityIdentifier("albumPlaybackInfo")
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(heading.title).font(.title2.weight(.semibold))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                    if let edition = heading.edition {
+                        Text(edition).font(.callout).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(Array(album.artists.enumerated()), id: \.offset) { _, artist in
+                        ArtistLink(model: model, artist: artist)
+                    }
+                }
+                Divider()
+                VStack(alignment: .leading, spacing: 12) {
+                    AlbumDetailLabel(symbol: "calendar", text: album.releaseYear.map(String.init) ?? "年份未知", label: "发行年份")
+                    AlbumDetailLabel(symbol: "music.note.list", text: "\(album.totalTracks) 首", label: "曲目数量")
+                    if !model.tracks.isEmpty {
+                        AlbumDetailLabel(
+                            symbol: "clock",
+                            text: PlaybackProgress.time(Double(model.tracks.reduce(0) { $0 + $1.durationMS }) / 1000),
+                            label: "总时长"
+                        )
+                    }
+                    AlbumDetailLabel(symbol: "play.circle", text: "\(model.history.albums[album.id, default: 0]) 次", label: "本机收听")
+                        .help("本机收听次数：同一专辑收听累计 30 秒记一次，从使用 Albumer 开始统计")
+                        .accessibilityIdentifier("albumPlayCount")
+                }
+                .accessibilityIdentifier("albumMetadata")
+                SavedAlbumButton(model: model, album: album)
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .accessibilityIdentifier("albumDetails")
+    }
+
+    private var trackHeader: some View {
+        HStack(spacing: 12) {
+            Text("#").frame(width: 24)
+            Text("曲目").frame(maxWidth: .infinity, alignment: .leading)
+            Image(systemName: "clock").frame(width: 44, alignment: .trailing)
+                .accessibilityLabel("时长")
+        }
+        .font(.caption).foregroundStyle(.secondary)
+        .padding(.horizontal, 30).frame(height: 34)
+        .accessibilityAddTraits(.isHeader)
     }
 
     private var trackList: some View {
-        ScrollViewReader { proxy in
+        let discs = AlbumDisc.group(model.tracks)
+        return ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(spacing: 2) {
-                    if model.tracks.isEmpty && model.isLoadingTracks {
-                        ForEach(0..<7) { index in
-                            HStack(spacing: 16) {
-                                Capsule().fill(.white.opacity(0.04)).frame(width: 18, height: 5)
-                                Capsule().fill(.white.opacity(0.035)).frame(width: CGFloat(110 + (index * 29) % 120), height: 6)
-                                Spacer()
-                            }.frame(height: 43).padding(.horizontal, 12)
+                LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
+                    ForEach(discs) { disc in
+                        Section {
+                            ForEach(Array(disc.tracks.enumerated()), id: \.element.id) { index, track in
+                                trackRow(track, index: index, multipleDiscs: discs.count > 1)
+                            }
+                        } header: {
+                            if discs.count > 1 {
+                                discHeader(disc, first: disc.id == discs.first?.id)
+                            }
                         }
                     }
-                    ForEach(model.tracks) { track in
-                        let playing = track.id == currentTrackID
-                        HStack(spacing: 15) {
-                            ZStack {
-                                if playing { PlaybackPulse(active: moving).frame(width: 16, height: 16) }
-                                else { Text(String(track.trackNumber)).font(PlayerType.number).monospacedDigit().foregroundStyle(Color.paper.opacity(0.42)) }
-                            }.frame(width: 20)
-                            Text(track.name).font(playing ? PlayerType.activeTrack : PlayerType.track)
-                                .foregroundStyle(playing ? Color.paper : Color.paper.opacity(0.8)).lineLimit(1).help(track.name)
-                            Spacer(minLength: 6)
-                            if let count = model.history.tracks[track.id], count > 0 {
-                                Text(String(count)).font(PlayerType.secondaryNumber).monospacedDigit().foregroundStyle(Color.paper.opacity(0.45))
-                                    .help("本机收听 \(count) 次")
-                            }
-                            Text(PlaybackProgress.time(Double(track.durationMS) / 1000)).font(PlayerType.number).monospacedDigit()
-                                .foregroundStyle(Color.paper.opacity(playing ? 0.72 : 0.54)).frame(width: 44, alignment: .trailing)
-                        }.padding(.horizontal, 10).frame(height: 42)
-                            .background {
-                                if playing {
-                                    RoundedRectangle(cornerRadius: 8).fill(Color.paper.opacity(0.065))
-                                        .matchedGeometryEffect(id: "currentTrack", in: currentRow)
-                                }
-                            }
-                            .id(track.id).accessibilityElement(children: .combine)
-                            .accessibilityLabel("\(track.trackNumber). \(track.name)\(playing ? "，正在播放" : "")")
-                            .accessibilityIdentifier("track-\(track.id)")
-                    }
                     if model.tracksFailed {
-                        GlyphButton(symbol: "arrow.clockwise", label: "重试加载曲目") { Task { await model.loadTracks(album) } }.frame(maxWidth: .infinity)
+                        Button("重试加载曲目", systemImage: "arrow.clockwise") { Task { await model.loadTracks(album) } }
+                            .padding(20)
+                    } else if model.isLoadingTracks && model.tracks.isEmpty {
+                        ProgressView().controlSize(.small).padding(32)
+                    } else if model.tracks.isEmpty {
+                        Text("暂无曲目").foregroundStyle(.secondary).padding(32)
                     }
-                }.padding(.vertical, 3)
-            }.scrollIndicators(.hidden).accessibilityIdentifier("albumTracks")
-                .animation(reduceMotion ? nil : .spring(response: 0.5, dampingFraction: 0.86), value: currentTrackID)
-                .onChange(of: currentTrackID) { _, id in
-                    if let id { withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.5)) { proxy.scrollTo(id, anchor: .center) } }
+                }.padding(.horizontal, 20).padding(.vertical, 6)
+            }
+            .accessibilityIdentifier("albumTracks")
+            .onChange(of: currentTrackID) { _, id in
+                if let id {
+                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
+                        proxy.scrollTo(id, anchor: .center)
+                    }
                 }
+            }
+        }
+    }
+
+    private func discHeader(_ disc: AlbumDisc, first: Bool) -> some View {
+        HStack(spacing: 12) {
+            Label("唱片 \(disc.number)", systemImage: "opticaldisc")
+                .font(.callout.weight(.semibold))
+            Spacer(minLength: 0)
+            Label("\(disc.tracks.count) 首", systemImage: "music.note.list")
+                .font(.caption).foregroundStyle(.secondary)
+            Label(PlaybackProgress.time(Double(disc.durationMS) / 1000), systemImage: "clock")
+                .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 10).padding(.vertical, 10)
+        .padding(.top, first ? 0 : 12)
+        .background(Color.contentBackground)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isHeader)
+        .accessibilityIdentifier("disc-\(disc.number)")
+    }
+
+    private func trackRow(_ track: AlbumTrack, index: Int, multipleDiscs: Bool) -> some View {
+        let playing = track.id == currentTrackID
+        let count = model.history.tracks[track.id, default: 0]
+        return HStack(spacing: 12) {
+            Group {
+                if playing {
+                    PlaybackIndicator(playing: model.playback?.isPlaying == true)
+                } else {
+                    Text(String(track.trackNumber)).font(.callout).monospacedDigit().foregroundStyle(.secondary)
+                }
+            }.frame(width: 24)
+            Text(track.name).font(.body.weight(playing ? .medium : .regular))
+                .lineLimit(1).help(track.name)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if count > 0 {
+                Text(String(count)).font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                    .help("本机收听 \(count) 次")
+            }
+            Text(PlaybackProgress.time(Double(track.durationMS) / 1000))
+                .font(.callout).monospacedDigit().foregroundStyle(.secondary)
+                .frame(width: 44, alignment: .trailing)
+        }
+        .padding(.horizontal, 10).frame(height: 38)
+        .background {
+            RoundedRectangle(cornerRadius: 4).fill(
+                playing ? Color.accentColor.opacity(0.12) :
+                    Color(nsColor: NSColor.alternatingContentBackgroundColors[index % 2])
+            )
+        }
+        .id(track.id)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(multipleDiscs ? "唱片 \(track.discNumber)，" : "")\(track.trackNumber). \(track.name)\(playing ? (model.playback?.isPlaying == true ? "，正在播放" : "，已暂停") : "")，\(PlaybackProgress.time(Double(track.durationMS) / 1000))，本机收听 \(count) 次")
+        .accessibilityIdentifier("track-\(track.id)")
+    }
+}
+
+struct SavedAlbumButton: View {
+    @Bindable var model: AppModel
+    let album: Album
+    private var saved: Bool { model.savedIDs.contains(album.id) }
+    private var pending: Bool { model.savingAlbumID == album.id || model.checkingSavedIDs.contains(album.id) }
+    private var needsCheck: Bool { !model.checkedSavedIDs.contains(album.id) }
+    private var title: String {
+        if model.savingAlbumID == album.id { return "正在保存…" }
+        if model.checkingSavedIDs.contains(album.id) { return "正在同步…" }
+        if needsCheck { return "重试读取收藏状态" }
+        return saved ? "已收藏" : "收藏专辑"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                Task {
+                    if needsCheck { await model.checkSaved(album) }
+                    else { await model.toggleSaved(album) }
+                }
+            } label: {
+                HStack(spacing: 7) {
+                    if pending { ProgressView().controlSize(.small) }
+                    else { Image(systemName: needsCheck ? "arrow.clockwise" : (saved ? "checkmark" : "plus")) }
+                    Text(title)
+                }
+            }
+            .albumButtonStyle()
+            .controlSize(.regular)
+            .help(needsCheck ? "重新读取收藏状态" : (saved ? "移除收藏" : "收藏专辑"))
+            .accessibilityLabel(pending ? title : (needsCheck ? title : (saved ? "移除收藏" : "收藏专辑")))
+            .disabled(model.isSaving || pending)
+            .accessibilityIdentifier("saveAlbum")
+            if let error = model.saveErrors[album.id] {
+                Text(error).font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("saveAlbumError")
+            }
         }
     }
 }
@@ -174,25 +252,24 @@ struct StageView: View {
 struct PlayButton: View {
     var playing: Bool
     var busy: Bool
-    var size: CGFloat = 38
     var action: () -> Void
-    @MotionPreference private var reduceMotion
+
     var body: some View {
         Button(action: action) {
-            ZStack {
-                Circle().fill(Color.paper)
-                if busy { ProgressView().controlSize(.small).tint(Color.room) }
-                else {
-                    Image(systemName: playing ? "pause.fill" : "play.fill")
-                        .font(.system(size: size * 0.28, weight: .semibold)).foregroundStyle(Color.room)
-                        .offset(x: playing ? 0 : 1)
-                        .contentTransition(.symbolEffect(.replace, options: .speed(1.5)))
+            Group {
+                if busy {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Label(playing ? "暂停" : "播放", systemImage: playing ? "pause.fill" : "play.fill")
                 }
-            }.frame(width: size, height: size)
-        }.buttonStyle(.plain).disabled(busy)
-            .accessibilityLabel(playing ? "暂停" : "播放")
-            .accessibilityIdentifier("playPause")
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: playing)
+            }.frame(minWidth: 52, minHeight: 22)
+        }
+        .albumButtonStyle(prominent: true)
+        .controlSize(.regular)
+        .disabled(busy)
+        .help(playing ? "暂停" : "播放整张专辑")
+        .accessibilityLabel(playing ? "暂停" : "播放")
+        .accessibilityIdentifier("playPause")
     }
 }
 
@@ -200,64 +277,112 @@ struct PlaybackProgress: View {
     @Bindable var model: AppModel
     @State private var scrubbing = false
     @State private var value = 0.0
+
     var body: some View {
         TimelineView(.periodic(from: .now, by: model.isForeground && model.playback?.isPlaying == true ? 0.25 : 60)) { context in
-            let duration = Double(model.playback?.item?.durationMS ?? 1) / 1000
+            let duration = Double(model.playback?.item?.durationMS ?? 0) / 1000
             let position = model.playback?.position(at: context.date) ?? 0
-            VStack(spacing: 3) {
-                Slider(value: Binding(get: { scrubbing ? value : position }, set: { value = $0 }), in: 0...max(1, duration)) { editing in
+            HStack(spacing: 8) {
+                Text(Self.time(scrubbing ? value : position)).frame(width: 36, alignment: .trailing)
+                Slider(value: Binding(
+                    get: { min(max(0, scrubbing ? value : position), max(1, duration)) },
+                    set: { value = $0 }
+                ), in: 0...max(1, duration)) { editing in
                     if editing { value = position }
                     scrubbing = editing
-                    if !editing { Task { await model.perform(.seek(Int(value * 1000))) } }
+                    if !editing && model.hasPlayback {
+                        Task { await model.perform(.seek(Int(value * 1000))) }
+                    }
                 }
-                .controlSize(.mini).tint(Color.paper.opacity(0.65))
-                .disabled(model.isBusy || model.playback?.allows("seeking") == false)
-                .accessibilityLabel("播放进度").accessibilityIdentifier("playbackProgress")
-                HStack {
-                    Text(Self.time(scrubbing ? value : position))
-                    Spacer()
-                    Text(Self.time(duration))
-                }.font(PlayerType.secondaryNumber).monospacedDigit().foregroundStyle(Color.paper.opacity(0.54))
+                .controlSize(.small)
+                .disabled(!model.hasPlayback || model.isBusy || model.playback?.allows("seeking") == false)
+                .accessibilityLabel("播放进度")
+                .accessibilityIdentifier("playbackProgress")
+                Text(duration > 0 ? Self.time(duration) : "–:––").frame(width: 36, alignment: .leading)
             }
+            .font(.caption).monospacedDigit().foregroundStyle(.secondary)
         }
+        .onChange(of: model.playback?.item?.id) { _, _ in scrubbing = false }
     }
+
     static func time(_ seconds: Double) -> String {
         let value = max(0, Int(seconds.isFinite ? seconds : 0))
         return String(format: "%d:%02d", value / 60, value % 60)
     }
 }
 
-struct MiniPlayer: View {
+private struct AlbumPlaybackControls: View {
     @Bindable var model: AppModel
+    let album: Album
+    private var current: Bool { model.playback?.context?.uri == album.albumID.uri }
+    private var playing: Bool { current && model.playback?.isPlaying == true }
+    private var playbackUnavailable: Bool {
+        !album.isAllowed || album.restrictions != nil ||
+            (current && model.playback?.allows(playing ? "pausing" : "resuming") == false)
+    }
+
     var body: some View {
-        VStack(spacing: 0) {
-            Rectangle().fill(.white.opacity(0.065)).frame(height: 1)
-            HStack(spacing: 14) {
-                if let album = model.playingAlbum {
-                    Button { if album.isAllowed { model.select(album) } } label: {
-                        HStack(spacing: 13) {
-                            AlbumArtwork(album: album, radius: 4).frame(width: 46, height: 46)
-                            VStack(alignment: .leading, spacing: 5) {
-                                Text(model.playback?.item?.name ?? album.name).font(.system(size: 12, weight: .medium)).lineLimit(1)
-                                Text(album.artist).font(.system(size: 11)).foregroundStyle(Color.quiet).lineLimit(1)
-                            }.frame(maxWidth: 180, alignment: .leading)
-                        }
-                    }.buttonStyle(.plain).help(album.name).accessibilityLabel("查看正在播放的专辑")
-                }
-                Spacer(minLength: 6)
-                GlyphButton(symbol: "backward.end.fill", label: "上一首", size: 28) { Task { await model.perform(.previous) } }
-                    .disabled(model.isBusy || model.playback?.allows("skipping_prev") == false)
-                PlayButton(playing: model.playback?.isPlaying == true, busy: model.isBusy) { Task { await model.togglePlayback() } }
-                    .disabled(model.playback?.allows(model.playback?.isPlaying == true ? "pausing" : "resuming") == false)
-                GlyphButton(symbol: "forward.end.fill", label: "下一首", size: 28) { Task { await model.perform(.next) } }
-                    .disabled(model.isBusy || model.playback?.allows("skipping_next") == false)
-                PlaybackProgress(model: model).frame(minWidth: 100, idealWidth: 180, maxWidth: 230).padding(.horizontal, 15)
+        GlassControls {
+            HStack(spacing: 8) {
+                PlayButton(playing: playing, busy: model.isBusy) { Task { await model.play(album) } }
+                    .disabled(playbackUnavailable)
                 Spacer(minLength: 0)
+                GlassIconButton(symbol: "backward.end.fill", label: "上一首") { Task { await model.perform(.previous) } }
+                    .disabled(!current || model.isBusy || model.playback?.allows("skipping_prev") == false)
+                GlassIconButton(symbol: "forward.end.fill", label: "下一首") { Task { await model.perform(.next) } }
+                    .disabled(!current || model.isBusy || model.playback?.allows("skipping_next") == false)
                 VolumeControl(model: model)
-                SpotifyAttribution(album: model.playingAlbum).padding(.leading, 16)
-            }.padding(.horizontal, 36).frame(height: 84)
-                .background(Color.room.opacity(0.7))
+                    .disabled(!current)
+            }
         }
+        .accessibilityIdentifier("albumPlaybackControls")
+    }
+}
+
+struct ArtistPortrait: View {
+    let model: AppModel
+    let artist: Artist
+    var size: CGFloat = 32
+    var loadEnabled = true
+    @State private var image: NSImage?
+    @State private var loadedArtist: Artist?
+
+    var body: some View {
+        ZStack {
+            Color(nsColor: .controlBackgroundColor)
+            if let image {
+                Image(nsImage: image).resizable().scaledToFill()
+            } else {
+                Image(systemName: "person.crop.circle")
+                    .font(.system(size: size * 0.75, weight: .regular)).foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: size, height: size).clipShape(Circle())
+        .accessibilityHidden(true)
+        .task(id: loadEnabled ? artist : nil) {
+            guard loadEnabled, loadedArtist != artist || image == nil else { return }
+            image = nil
+            guard let url = await model.artistPortrait(for: artist), !Task.isCancelled else { return }
+            let loaded = await ImageStore.shared.image(at: url)
+            if !Task.isCancelled { image = loaded; loadedArtist = artist }
+        }
+    }
+}
+
+private struct AlbumDetailLabel: View {
+    let symbol: String
+    let text: String
+    let label: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: symbol).frame(width: 18)
+            Text(text).monospacedDigit()
+        }
+        .font(.callout).foregroundStyle(.secondary)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(label)：\(text)")
+        .help("\(label)：\(text)")
     }
 }
 
@@ -265,19 +390,21 @@ struct VolumeControl: View {
     @Bindable var model: AppModel
     @State private var showing = false
     @State private var volume = 50.0
+
     var body: some View {
-        GlyphButton(symbol: "speaker.wave.2", label: "音量", size: 30) {
-            volume = Double(model.playback?.device?.volumePercent ?? 50); showing.toggle()
+        GlassIconButton(symbol: "speaker.wave.2", label: "音量") {
+            volume = Double(model.playback?.device?.volumePercent ?? 50)
+            showing.toggle()
         }
         .disabled(model.playback?.device?.supportsVolume != true)
         .popover(isPresented: $showing) {
-            HStack {
-                Image(systemName: "speaker.fill").font(.system(size: 11)).foregroundStyle(Color.quiet)
+            HStack(spacing: 10) {
+                Image(systemName: "speaker.fill").foregroundStyle(.secondary)
                 Slider(value: $volume, in: 0...100) { editing in
                     if !editing { Task { await model.perform(.volume(Int(volume))) } }
-                }.tint(Color.paper).disabled(model.isBusy).accessibilityLabel("音量")
-                Text("\(Int(volume))").font(.system(size: 10, design: .monospaced)).frame(width: 25)
-            }.padding(20).frame(width: 240).preferredColorScheme(.dark)
+                }.disabled(model.isBusy).accessibilityLabel("音量")
+                Text("\(Int(volume))").font(.caption).monospacedDigit().frame(width: 26)
+            }.padding(20).frame(width: 240)
         }
     }
 }

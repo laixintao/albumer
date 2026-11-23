@@ -65,6 +65,12 @@ actor LocalStore {
     func saveHistory(_ history: ListeningHistory, account: String) {
         write(history, to: dataRoot.appendingPathComponent("history/\(Self.key(account)).json"))
     }
+    func preferredDeviceID(account: String) -> String? {
+        read(String.self, at: accountURL(account).appendingPathComponent("device.json"))
+    }
+    func savePreferredDeviceID(_ id: String, account: String) {
+        write(id, to: accountURL(account).appendingPathComponent("device.json"))
+    }
     func removeAccountCache(_ account: String) {
         try? FileManager.default.removeItem(at: accountURL(account))
     }
