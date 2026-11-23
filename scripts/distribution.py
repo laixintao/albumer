@@ -11,6 +11,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -175,6 +176,20 @@ def release_record(tag, repository):
     raise RuntimeError('Could not read release state: ' + result.stderr)
 
 
+def wait_for_draft(tag, repository):
+    # Newly created drafts can take a moment to appear in GitHub's release list.
+    # Wait without creating a second draft or replacing any existing assets.
+    for delay in [0, 1, 2, 4, 8, 16, 30]:
+        if delay:
+            time.sleep(delay)
+        record = release_record(tag, repository)
+        if record:
+            if not record['draft']:
+                raise ValueError('Release became public before upload; no assets replaced.')
+            return record
+    raise ValueError('Draft is not visible yet. Rerun the failed publish job to reuse the tested artifacts.')
+
+
 def publish(directory, tag):
     version = validate_metadata(tag)
     names = verify_packages(directory, version)
@@ -189,9 +204,7 @@ def publish(directory, tag):
             '--target', run('git', 'rev-parse', 'HEAD').stdout.strip(), '--title', f'Albumer {version}',
             '--notes-file', ROOT / f'docs/releases/{tag}.md')
     # Only drafts may resume. Do not silently change an asset uploaded by an earlier attempt.
-    record = release_record(tag, repository)
-    if not record or not record['draft']:
-        raise ValueError('Expected a draft before asset upload.')
+    record = wait_for_draft(tag, repository)
     existing = {asset['name']: asset for asset in record['assets']}
     if set(existing) - set(names):
         raise ValueError('Draft contains unexpected assets; inspect it before resuming.')

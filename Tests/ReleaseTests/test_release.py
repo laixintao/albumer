@@ -149,6 +149,25 @@ class ReleaseCommandTests(unittest.TestCase):
 
 
 class ReleaseBoundaryTests(unittest.TestCase):
+    def test_new_draft_visibility_delay_is_retried_without_creating_another(self):
+        draft = {'draft': True, 'assets': []}
+        with patch.object(distribution, 'release_record', side_effect=[None, None, draft]), \
+             patch.object(distribution.time, 'sleep') as sleep, \
+             patch.object(distribution, 'run') as command:
+            self.assertEqual(distribution.wait_for_draft('v1.0.1', 'laixintao/albumer'), draft)
+            self.assertEqual([call.args[0] for call in sleep.call_args_list], [1, 2])
+            command.assert_not_called()
+
+    def test_draft_wait_is_bounded_and_never_accepts_a_public_release(self):
+        with patch.object(distribution, 'release_record', return_value=None) as lookup, \
+             patch.object(distribution.time, 'sleep'):
+            with self.assertRaisesRegex(ValueError, 'Rerun the failed publish job'):
+                distribution.wait_for_draft('v1.0.1', 'laixintao/albumer')
+            self.assertEqual(lookup.call_count, 7)
+        with patch.object(distribution, 'release_record', return_value={'draft': False}):
+            with self.assertRaisesRegex(ValueError, 'became public'):
+                distribution.wait_for_draft('v1.0.1', 'laixintao/albumer')
+
     def test_draft_is_found_when_by_tag_endpoint_returns_not_found(self):
         draft = {'tag_name': 'v1.0.1', 'draft': True, 'assets': []}
         responses = [subprocess.CompletedProcess([], 1, '', 'gh: Not Found (HTTP 404)'),
