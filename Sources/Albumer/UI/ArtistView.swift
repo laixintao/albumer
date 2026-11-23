@@ -64,6 +64,7 @@ struct ArtistView: View {
                 }
                 .padding(24)
             }
+            .scrollIndicators(.never)
             .scrollPosition($position)
             .onScrollPhaseChange { _, phase in scrolling = phase != .idle }
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, offset in

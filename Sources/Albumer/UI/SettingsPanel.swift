@@ -101,6 +101,7 @@ struct SettingsPanel: View {
             }
             .disabled(model.isDisconnecting)
             .formStyle(.grouped)
+            .scrollIndicators(.never)
             .frame(height: connected ? 320 : 430)
             Divider()
             HStack(spacing: 12) {
@@ -146,7 +147,7 @@ struct PlaybackDevicesView: View {
                     ScrollView(.horizontal) {
                         deviceButtons
                     }
-                    .scrollIndicators(.hidden)
+                    .scrollIndicators(.never)
                     .frame(minWidth: 100, maxWidth: 360)
                     .frame(height: 28)
                 }

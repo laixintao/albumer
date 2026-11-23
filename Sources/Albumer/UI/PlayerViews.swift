@@ -99,6 +99,7 @@ struct StageView: View {
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .scrollIndicators(.never)
         .accessibilityIdentifier("albumDetails")
     }
 
@@ -140,6 +141,7 @@ struct StageView: View {
                     }
                 }.padding(.horizontal, 20).padding(.vertical, 6)
             }
+            .scrollIndicators(.never)
             .accessibilityIdentifier("albumTracks")
             .onChange(of: currentTrackID) { _, id in
                 if let id {

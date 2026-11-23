@@ -52,5 +52,6 @@ private struct LegalDocumentView: View {
             HStack { Spacer(); Button("完成") { dismiss() }.keyboardShortcut(.cancelAction) }
         }
         .padding(24).frame(width: 620, height: 560)
+        .scrollIndicators(.never)
     }
 }

@@ -29,7 +29,7 @@ struct ContentView: View {
                 }
             }
         }
-        .scrollIndicators(.hidden)
+        .scrollIndicators(.never)
         .background(Color.contentBackground)
         .frame(minWidth: 820, minHeight: 600)
         .coordinateSpace(name: AlbumInsertion.coordinateSpace)
@@ -348,6 +348,7 @@ struct CollectionView: View {
                         }
                     }
                 }
+                .scrollIndicators(.never)
                 .scrollPosition($position)
                 .onScrollPhaseChange { _, phase in scrolling = phase != .idle }
                 .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, offset in
