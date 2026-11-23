@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.5 — 2026-11-23
+
+[Release notes](docs/releases/v1.0.5.md)
+
+- fix: find release drafts and prepare first public release notes (`aa10ce9`)
+
 ## 1.0.4 — 2026-11-23
 
 [Release notes](docs/releases/v1.0.4.md)
