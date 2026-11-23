@@ -164,7 +164,14 @@ def release_record(tag, repository):
     if result.returncode == 0:
         return json.loads(result.stdout)
     if '(HTTP 404)' in result.stderr:
-        return None
+        # GitHub's by-tag endpoint only returns published releases. The authenticated
+        # list includes drafts, which must be found before creating or resuming one.
+        pages = json.loads(run('gh', 'api', '--paginate', '--slurp',
+                               f'repos/{repository}/releases?per_page=100').stdout)
+        matches = [release for page in pages for release in page if release['tag_name'] == tag]
+        if len(matches) > 1:
+            raise ValueError(f'Multiple releases found for {tag}; inspect them before publishing.')
+        return matches[0] if matches else None
     raise RuntimeError('Could not read release state: ' + result.stderr)
 
 

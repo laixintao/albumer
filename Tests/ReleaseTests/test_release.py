@@ -149,6 +149,32 @@ class ReleaseCommandTests(unittest.TestCase):
 
 
 class ReleaseBoundaryTests(unittest.TestCase):
+    def test_draft_is_found_when_by_tag_endpoint_returns_not_found(self):
+        draft = {'tag_name': 'v1.0.1', 'draft': True, 'assets': []}
+        responses = [subprocess.CompletedProcess([], 1, '', 'gh: Not Found (HTTP 404)'),
+                     subprocess.CompletedProcess([], 0, json.dumps([
+                         [{'tag_name': 'v1.0.2', 'draft': False}], [draft]
+                     ]), '')]
+        with patch.object(distribution, 'run', side_effect=responses):
+            self.assertEqual(distribution.release_record('v1.0.1', 'laixintao/albumer'), draft)
+
+    def test_missing_release_requires_successful_draft_lookup(self):
+        responses = [subprocess.CompletedProcess([], 1, '', 'gh: Not Found (HTTP 404)'),
+                     subprocess.CompletedProcess([], 0, '[[]]', '')]
+        with patch.object(distribution, 'run', side_effect=responses):
+            self.assertIsNone(distribution.release_record('v1.0.1', 'laixintao/albumer'))
+        responses[1] = subprocess.CalledProcessError(1, ['gh', 'api'], stderr='temporary network error')
+        with patch.object(distribution, 'run', side_effect=responses):
+            with self.assertRaises(subprocess.CalledProcessError):
+                distribution.release_record('v1.0.1', 'laixintao/albumer')
+
+    def test_authentication_error_is_not_treated_as_a_missing_release(self):
+        response = subprocess.CompletedProcess([], 1, '', 'gh: Bad credentials (HTTP 401)')
+        with patch.object(distribution, 'run', return_value=response) as command:
+            with self.assertRaisesRegex(RuntimeError, 'Could not read release state'):
+                distribution.release_record('v1.0.1', 'laixintao/albumer')
+            self.assertEqual(command.call_count, 1)
+
     def test_public_release_cannot_be_replaced(self):
         with patch.object(distribution, 'validate_metadata', return_value='1.0.1'), \
              patch.object(distribution, 'verify_packages', return_value=['package.dmg']), \
