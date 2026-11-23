@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.4 — 2026-11-23
+
+[Release notes](docs/releases/v1.0.4.md)
+
+- fix: isolate navigation and lifecycle observation for Xcode 26 (`df842d3`)
+
 ## 1.0.3 — 2026-11-23
 
 [Release notes](docs/releases/v1.0.3.md)
