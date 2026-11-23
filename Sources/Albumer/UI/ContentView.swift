@@ -12,6 +12,24 @@ struct ContentView: View {
     @State private var detailFrame = CGRect.zero
 
     var body: some View {
+        observedContent
+        .navigationTitle(windowTitle)
+        .toolbar { toolbar }
+        .sheet(isPresented: $model.showSettings) { SettingsPanel(model: model) }
+        .task {
+            guard await model.startIfNeeded(), !Task.isCancelled else { return }
+            if ProcessInfo.processInfo.arguments.contains("--stage"),
+               let album = model.playingAlbum.flatMap({ $0.isAllowed ? $0 : nil }) ?? model.albums.first {
+                model.select(album)
+                if model.isDemo && ProcessInfo.processInfo.arguments.contains("--playing") { await model.play(album) }
+            }
+        }
+        .onExitCommand { model.requestBack() }
+        .background(WindowReader(model: model))
+    }
+
+    // Keep independently type-checked sections small for the Xcode 26 release compiler.
+    private var pageContent: some View {
         VStack(spacing: 0) {
             if let notice = model.notice { noticeBanner(notice) }
             if model.connection == .restoring {
@@ -33,37 +51,16 @@ struct ContentView: View {
         .background(Color.contentBackground)
         .frame(minWidth: 820, minHeight: 600)
         .coordinateSpace(name: AlbumInsertion.coordinateSpace)
-        .overlayPreferenceValue(AlbumArtworkDestinationKey.self) { destination in
-            GeometryReader { geometry in
-                if let insertion, let destination,
-                   destination.albumID == insertion.album.id,
-                   model.selectedAlbum?.id == insertion.album.id {
-                    AlbumInsertionOverlay(insertion: insertion, destination: geometry[destination.bounds]) {
-                        if self.insertion?.id == insertion.id { self.insertion = nil }
-                    }
-                    .id(insertion.id)
-                }
+    }
+
+    private var transitionContent: some View {
+        pageContent
+            .overlayPreferenceValue(AlbumArtworkDestinationKey.self) { destination in
+                insertionOverlay(destination)
             }
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
-            .clipped()
-        }
-        .overlayPreferenceValue(AlbumReturnDestinationKey.self) { destinations in
-            GeometryReader { geometry in
-                if let returning {
-                    let candidates = (destinations[returning.album.id] ?? []).map { geometry[$0] }
-                    let viewport = CGRect(origin: .zero, size: geometry.size)
-                    let destination = candidates.last { frame in
-                        !frame.isEmpty && viewport.contains(CGPoint(x: frame.midX, y: frame.midY))
-                    }
-                    AlbumReturnOverlay(returning: returning, destination: destination) {
-                        if self.returning?.id == returning.id { self.returning = nil }
-                    }
-                    .id(returning.id)
-                }
+            .overlayPreferenceValue(AlbumReturnDestinationKey.self) { destinations in
+                returnOverlay(destinations)
             }
-            .allowsHitTesting(false).accessibilityHidden(true).clipped()
-        }
         .environment(\.returningAlbumID, returning?.album.id)
         .task(id: returning?.id) {
             guard let id = returning?.id else { return }
@@ -71,21 +68,14 @@ struct ContentView: View {
             do { try await Task.sleep(for: .milliseconds(700)) } catch { return }
             if returning?.id == id { returning = nil }
         }
+    }
+
+    private var observedContent: some View {
+        transitionContent
         .onChange(of: model.backRequest) { _, _ in goBack() }
         .onChange(of: model.selectedArtist?.artist.id) { _, _ in
             if model.selectedAlbum == nil { insertion = nil }
             if model.selectedAlbum != nil { returning = nil }
-        }
-        .navigationTitle(windowTitle)
-        .toolbar { toolbar }
-        .sheet(isPresented: $model.showSettings) { SettingsPanel(model: model) }
-        .task {
-            guard await model.startIfNeeded(), !Task.isCancelled else { return }
-            if ProcessInfo.processInfo.arguments.contains("--stage"),
-               let album = model.playingAlbum.flatMap({ $0.isAllowed ? $0 : nil }) ?? model.albums.first {
-                model.select(album)
-                if model.isDemo && ProcessInfo.processInfo.arguments.contains("--playing") { await model.play(album) }
-            }
         }
         .onChange(of: scenePhase) { _, phase in model.setForeground(phase == .active) }
         .onChange(of: model.isSearching) { _, searching in
@@ -106,8 +96,41 @@ struct ContentView: View {
             if showing { insertion = nil; returning = nil }
         }
         .onDisappear { insertion = nil; returning = nil }
-        .onExitCommand { model.requestBack() }
-        .background(WindowReader(model: model))
+    }
+
+    private func insertionOverlay(_ destination: AlbumArtworkDestination?) -> some View {
+        GeometryReader { geometry in
+            if let insertion, let destination,
+               destination.albumID == insertion.album.id,
+               model.selectedAlbum?.id == insertion.album.id {
+                AlbumInsertionOverlay(insertion: insertion, destination: geometry[destination.bounds]) {
+                    if self.insertion?.id == insertion.id { self.insertion = nil }
+                }
+                .id(insertion.id)
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+        .clipped()
+    }
+
+    private func returnOverlay(_ destinations: [String: [Anchor<CGRect>]]) -> some View {
+        GeometryReader { geometry in
+            if let returning {
+                let candidates = (destinations[returning.album.id] ?? []).map { geometry[$0] }
+                let viewport = CGRect(origin: .zero, size: geometry.size)
+                let destination = candidates.last { frame in
+                    !frame.isEmpty && viewport.contains(CGPoint(x: frame.midX, y: frame.midY))
+                }
+                AlbumReturnOverlay(returning: returning, destination: destination) {
+                    if self.returning?.id == returning.id { self.returning = nil }
+                }
+                .id(returning.id)
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+        .clipped()
     }
 
     private func goBack() {
