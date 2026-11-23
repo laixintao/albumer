@@ -155,6 +155,45 @@ final class TrackAnnouncementTests: XCTestCase {
         XCTAssertEqual(clock.waits.count, 1)
         controller.update(nil, isPlaying: false)
     }
+    func testOpeningToastConsumesItWithoutSuppressingNextTrack() async throws {
+        let clock = AnnouncementClock()
+        defer { clock.cancelRemaining() }
+        var shown: [String] = []
+        var hidden = 0
+        let controller = TrackAnnouncementController(wait: { try await clock.sleep($0) },
+                                                    present: { shown.append($0.id) }, dismiss: { hidden += 1 })
+        controller.update(announcement("A"), isPlaying: true)
+        try await waitUntil { clock.waits.count == 1 }
+        clock.advance(0)
+        try await waitUntil { clock.waits.count == 2 }
+        controller.dismiss(announcement("A").id)
+        XCTAssertEqual(hidden, 1)
+        controller.update(announcement("A", artwork: URL(string: "https://example.test/late.jpg")), isPlaying: true)
+        XCTAssertEqual(shown, [announcement("A").id])
+        controller.update(announcement("B"), isPlaying: true)
+        try await waitUntil { clock.waits.count == 3 }
+        controller.dismiss(announcement("A").id)
+        clock.advance(2)
+        try await waitUntil { shown.last == announcement("B").id }
+        clock.advance(1)
+        await Task.yield()
+        XCTAssertEqual(hidden, 1, "The consumed toast's old timer must not dismiss the next song")
+        controller.reset()
+    }
+
+    func testToastDestinationUsesTrackAlbumAndNeverUnrelatedBrowsingOrPlaylist() {
+        let record = Album(id: "album", name: "Record", artists: [], albumType: "album", images: [], releaseDate: "2020", totalTracks: 13)
+        let matching = TrackAnnouncement(state: snapshot(), album: record, tracks: [])
+        XCTAssertEqual(matching?.albumID, record.albumID)
+        XCTAssertEqual(matching?.album, record)
+        let track = PlaybackTrack(id: "track", name: "Song", artists: [], durationMS: 180000,
+                                  trackNumber: 1, discNumber: 1, album: nil)
+        let playlist = PlaybackSnapshot(isPlaying: true, item: track,
+                                        context: PlaybackContext(type: "playlist", uri: "spotify:playlist:other"))
+        let unknown = TrackAnnouncement(state: playlist, album: record, tracks: [])
+        XCTAssertNil(unknown?.albumID)
+        XCTAssertNil(unknown?.album)
+    }
     func testArtworkFallsBackOnlyToThePlayingAlbumAndPrefersPlaybackImage() {
         let cover = URL(string: "https://example.test/library.jpg")!
         let playingCover = URL(string: "https://example.test/playing.jpg")!

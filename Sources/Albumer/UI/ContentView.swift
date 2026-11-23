@@ -259,8 +259,8 @@ struct CollectionView: View {
         VStack(spacing: 0) {
             GlassControls {
                 HStack(spacing: 20) {
-                    if let album = model.playingAlbum, album.isAllowed {
-                        CurrentAlbumLink(model: model, album: album, selectAlbum: selectAlbum)
+                    if model.hasPlayback {
+                        CurrentAlbumLink(model: model, album: model.playingAlbum, selectAlbum: selectAlbum)
                             .frame(maxWidth: 280, alignment: .leading)
                     }
                     if !model.isSearching { RecommendationPromptButton(model: model) }
@@ -419,18 +419,41 @@ private struct AlbumGridArrangement: Equatable {
 
 private struct CurrentAlbumLink: View {
     @Bindable var model: AppModel
-    let album: Album
+    let album: Album?
     let selectAlbum: (Album, CGRect) -> Void
     @State private var artworkFrame = CGRect.zero
+    @State private var loadedArtwork: NSImage?
+    @State private var loadedURL: URL?
     @Environment(\.returningAlbumID) private var returningAlbumID
     private var playing: Bool { model.playback?.isPlaying == true }
+    private var info: DockPlaybackInfo { model.dockPlaybackInfo }
+    private var title: String { info.album ?? info.track ?? "正在播放" }
+    private var artwork: NSImage? {
+        guard let url = model.playingArtworkURL else { return nil }
+        return loadedURL == url ? loadedArtwork : ImageStore.shared.cachedImage(at: url)
+    }
 
     var body: some View {
-        Button { selectAlbum(album, artworkFrame) } label: {
+        Button {
+            if let album { selectAlbum(album, artworkFrame) }
+            else if let announcement = TrackAnnouncement(state: model.playback, album: nil, tracks: []) {
+                Task { await model.openAlbum(from: announcement) }
+            }
+        } label: {
             HStack(spacing: 10) {
-                AlbumArtwork(album: album, radius: 4).frame(width: 48, height: 48)
-                    .opacity(returningAlbumID == album.id ? 0 : 1)
-                    .anchorPreference(key: AlbumReturnDestinationKey.self, value: .bounds) { [album.id: [$0]] }
+                ZStack {
+                    Color(nsColor: .controlBackgroundColor)
+                    if let artwork {
+                        Image(nsImage: artwork).resizable().interpolation(.high).scaledToFit()
+                    } else {
+                        Image(systemName: "opticaldisc").foregroundStyle(.secondary)
+                    }
+                }
+                    .frame(width: 48, height: 48).clipShape(RoundedRectangle(cornerRadius: 4))
+                    .opacity(album != nil && returningAlbumID == album?.id ? 0 : 1)
+                    .anchorPreference(key: AlbumReturnDestinationKey.self, value: .bounds) { anchor in
+                        album.map { [$0.id: [anchor]] } ?? [:]
+                    }
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(AlbumInsertion.coordinateSpace)) } action: {
                         artworkFrame = $0
                     }
@@ -438,19 +461,33 @@ private struct CurrentAlbumLink: View {
                     Label(playing ? "正在播放" : "已暂停", systemImage: playing ? "speaker.wave.2.fill" : "pause.fill")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(playing ? Color.accentColor : Color.secondary)
-                    Text(album.name).font(.body.weight(.medium)).lineLimit(1)
-                    Text(album.artist).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    Text(title).font(.body.weight(.medium)).lineLimit(1)
+                    if let artist = info.artist {
+                        Text(artist).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
                 }.frame(maxWidth: .infinity, alignment: .leading)
-                Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
+                if model.playingAlbumID != nil {
+                    Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
+                }
             }
             .padding(10)
             .contentShape(RoundedRectangle(cornerRadius: 16))
             .controlGlass(cornerRadius: 16, interactive: true)
         }
         .buttonStyle(.plain)
-        .help("查看正在播放的专辑：\(album.name)")
-        .accessibilityLabel("\(playing ? "正在播放" : "已暂停")，\(album.name)，\(album.artist)，查看专辑")
+        .disabled(model.playingAlbumID == nil)
+        .help("查看正在播放的专辑：\(title)")
+        .accessibilityLabel("\(playing ? "正在播放" : "已暂停")，\(title)，\(info.artist ?? "")")
         .accessibilityIdentifier("currentAlbum")
+        .task(id: model.playingArtworkURL) {
+            let url = model.playingArtworkURL
+            loadedURL = url
+            loadedArtwork = url.flatMap { ImageStore.shared.cachedImage(at: $0) }
+            guard let url else { return }
+            let image = await ImageStore.shared.image(at: url)
+            guard !Task.isCancelled else { return }
+            loadedArtwork = image
+        }
     }
 }
 

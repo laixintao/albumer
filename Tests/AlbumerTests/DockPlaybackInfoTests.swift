@@ -35,6 +35,17 @@ final class DockPlaybackInfoTests: XCTestCase {
         XCTAssertNil(info.album); XCTAssertNil(info.year)
         XCTAssertEqual(info.counter, "2/—")
     }
+    func testPartialPlaybackStillShowsItsOwnSongAndAlbumWhileBrowsingElsewhere() throws {
+        let json = #"{"is_playing":true,"progress_ms":42000,"item":{"id":"track","name":"Playing Song","duration_ms":180000,"album":{"id":"playing","name":"Playing Album"}}}"#
+        let playback = try JSONDecoder().decode(PlaybackSnapshot.self, from: Data(json.utf8))
+        let browsing = Album(id: "browsing", name: "Wrong Album", artists: [], albumType: "album",
+                             images: [], releaseDate: "2026", totalTracks: 8)
+        let info = DockPlaybackInfo(playback: playback, album: browsing, tracks: [], connected: true, busy: false)
+        XCTAssertEqual(info.status, "正在播放")
+        XCTAssertEqual(info.track, "Playing Song")
+        XCTAssertEqual(info.album, "Playing Album")
+        XCTAssertNil(info.year)
+    }
     func testBusyDisconnectedAndEmptyPlaybackDisableControls() {
         let busy = DockPlaybackInfo(playback: state(), album: album, tracks: [], connected: true, busy: true)
         let disconnected = DockPlaybackInfo(playback: state(), album: album, tracks: [], connected: false, busy: false)

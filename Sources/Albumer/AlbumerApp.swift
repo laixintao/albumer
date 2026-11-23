@@ -17,7 +17,7 @@ struct AlbumerApp: App {
     @AppStorage("groupAlbumsByArtist") private var groupByArtist = false
     @AppStorage("albumSortOrder") private var sortOrder: AlbumSortOrder = .library
     private var playbackMatchesSelection: Bool {
-        model.hasPlayback && (model.selectedAlbum == nil || model.playback?.context?.uri == model.selectedAlbum?.albumID.uri)
+        model.hasPlayback && (model.selectedAlbum == nil || model.playingAlbumID == model.selectedAlbum?.albumID)
     }
     var body: some Scene {
         WindowGroup("Albumer", id: "main") {
@@ -102,6 +102,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.model = model
         self.openMainWindow = openMainWindow
         openingWindow = false
+        TrackToastPanel.shared.onActivate = { [weak self] announcement in
+            guard let self, let model = self.model else { return }
+            self.showMainWindow()
+            Task { await model.openAlbum(from: announcement) }
+        }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {

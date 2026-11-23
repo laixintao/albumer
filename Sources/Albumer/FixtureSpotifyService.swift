@@ -51,6 +51,10 @@ actor FixtureSpotifyService: SpotifyService {
         let albums = Self.albums.filter { saved.contains($0.id) }
         return AlbumPage(albums: Array(albums.dropFirst(offset).prefix(20)), nextOffset: offset + 20 < albums.count ? offset + 20 : nil, total: albums.count)
     }
+    func album(_ id: AlbumID) async throws -> Album {
+        guard let album = Self.albums.first(where: { $0.albumID == id }) else { throw SpotifyError.invalidResponse }
+        return album
+    }
     func searchAlbums(query: String, offset: Int) async throws -> AlbumPage {
         let albums = Self.albums.filter { "\($0.name) \($0.artist)".localizedCaseInsensitiveContains(query) }
         return AlbumPage(albums: Array(albums.dropFirst(offset).prefix(10)), nextOffset: offset + 10 < albums.count ? offset + 10 : nil, total: albums.count)

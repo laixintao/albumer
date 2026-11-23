@@ -8,6 +8,7 @@ private actor LibraryService: SpotifyService {
     var albums: [Album]
     var failure: SpotifyError?
     var requestCount = 0
+    var albumRequestCount = 0
     let delay: Duration
     let pageSize: Int
     var outputs: [PlaybackDevice] = []
@@ -24,6 +25,8 @@ private actor LibraryService: SpotifyService {
     var saveFailure: SpotifyError?
     var savedCheckFailure: SpotifyError?
     var playbackFailure: SpotifyError?
+    private var holdNextPlayback = false
+    private var heldPlayback: (PlaybackSnapshot?, CheckedContinuation<PlaybackSnapshot?, Error>)?
     var saveDelay: Duration = .zero
     var saveRequests: [Bool] = []
 
@@ -40,6 +43,13 @@ private actor LibraryService: SpotifyService {
         return AlbumPage(albums: Array(albums.dropFirst(offset).prefix(pageSize)), nextOffset: offset + pageSize < albums.count ? offset + pageSize : nil, total: albums.count)
     }
     func searchAlbums(query: String, offset: Int) async throws -> AlbumPage { try await savedAlbums(offset: offset) }
+    func album(_ id: AlbumID) async throws -> Album {
+        albumRequestCount += 1
+        if delay != .zero { try? await Task.sleep(for: delay) }
+        if let failure { throw failure }
+        guard let album = albums.first(where: { $0.albumID == id }) else { throw SpotifyError.invalidResponse }
+        return album
+    }
     func setTracks(_ tracks: [AlbumTrack], delay: Duration = .zero, failure: SpotifyError? = nil) {
         trackResults = tracks; trackDelay = delay; trackFailure = failure
     }
@@ -65,8 +75,19 @@ private actor LibraryService: SpotifyService {
     func setDevices(_ devices: [PlaybackDevice]) { outputs = devices }
     func delayDevices(_ delay: Duration) { deviceDelay = delay }
     func setPlayback(_ state: PlaybackSnapshot?) { self.state = state }
+    func holdPlaybackRead() { holdNextPlayback = true }
+    func hasHeldPlayback() -> Bool { heldPlayback != nil }
+    func releasePlaybackRead() {
+        let held = heldPlayback
+        heldPlayback = nil
+        if let (snapshot, continuation) = held { continuation.resume(returning: snapshot) }
+    }
     func playback() async throws -> PlaybackSnapshot? {
         if let playbackFailure { throw playbackFailure }
+        if holdNextPlayback {
+            holdNextPlayback = false
+            return try await withCheckedThrowingContinuation { heldPlayback = (state, $0) }
+        }
         return state
     }
     func devices() async throws -> [PlaybackDevice] {
@@ -130,6 +151,104 @@ final class AppModelTests: XCTestCase {
         await model.performDockAction(.next)
         let blockedCommands = await service.commandCount
         XCTAssertEqual(blockedCommands, 1)
+    }
+
+    func testToastOpensItsCapturedAlbumAfterPlaybackChangesAndPreservesBackNavigation() async throws {
+        let service = LibraryService([])
+        let model = AppModel(service: service)
+        model.connection = .connected
+        let record = album("Toast Album")
+        let browsing = album("Browsing")
+        model.select(browsing)
+        let state = PlaybackSnapshot(isPlaying: true, item: PlaybackTrack(id: "old-track", name: "Toast Song", artists: [],
+                                    durationMS: 180000, trackNumber: 1, discNumber: 1, album: record))
+        let toast = try XCTUnwrap(TrackAnnouncement(state: state, album: nil, tracks: []))
+        model.playback = PlaybackSnapshot(isPlaying: true, item: PlaybackTrack(id: "new-track", name: "New Song", artists: [],
+                                         durationMS: 180000, trackNumber: 1, discNumber: 1, album: album("New Album")))
+        await model.openAlbum(from: toast)
+        XCTAssertEqual(model.selectedAlbum, record)
+        XCTAssertEqual(model.playback?.item?.id, "new-track")
+        model.goBack()
+        XCTAssertEqual(model.selectedAlbum, browsing)
+        let commands = await service.commandCount
+        let plays = await service.playedOn
+        let fetches = await service.albumRequestCount
+        XCTAssertEqual(commands, 0); XCTAssertTrue(plays.isEmpty); XCTAssertEqual(fetches, 0)
+    }
+
+    func testToastWithPartialAlbumLoadsDetailsByItsCapturedID() async throws {
+        let record = album("toast")
+        let service = LibraryService([record])
+        let model = AppModel(service: service)
+        model.connection = .connected
+        let state = PlaybackSnapshot(isPlaying: true, item: PlaybackTrack(id: "track", name: "Song", artists: [],
+                                    durationMS: 180000, trackNumber: 1, discNumber: 1, album: nil, albumID: record.albumID))
+        let toast = try XCTUnwrap(TrackAnnouncement(state: state, album: nil, tracks: []))
+        await model.openAlbum(from: toast)
+        XCTAssertEqual(model.selectedAlbum, record)
+        let fetches = await service.albumRequestCount
+        XCTAssertEqual(fetches, 1)
+    }
+
+    func testPlaylistSingleFollowsPlaybackAndPausesWithoutRestartingAlbum() async {
+        let single = Album(id: "single", name: "Playing Single", artists: [Artist(name: "Artist")],
+                           albumType: "single", images: [], releaseDate: "2020", totalTracks: 1)
+        let service = LibraryService([])
+        let model = AppModel(service: service)
+        model.connection = .connected
+        let output = device("mac", active: true)
+        await service.setDevices([output])
+        await service.setPlayback(PlaybackSnapshot(device: output, isPlaying: true, progressMS: 42000,
+            item: PlaybackTrack(id: "song", name: "Playing Song", artists: single.artists,
+                                durationMS: 180000, trackNumber: 1, discNumber: 1, album: single),
+            context: PlaybackContext(type: "playlist", uri: "spotify:playlist:mix")))
+        await model.refreshPlayback()
+        XCTAssertTrue(model.hasPlayback)
+        XCTAssertEqual(model.playingAlbum, single)
+        XCTAssertEqual(model.dockPlaybackInfo.status, "正在播放")
+        model.select(single)
+        await model.togglePlayback()
+        XCTAssertEqual(model.playback?.isPlaying, false)
+        XCTAssertEqual(model.dockPlaybackInfo.status, "已暂停")
+        let commands = await service.commandCount
+        let starts = await service.playedOn
+        XCTAssertEqual(commands, 1)
+        XCTAssertTrue(starts.isEmpty)
+    }
+
+    func testSlowPlaybackPollCannotOverwriteNewerCommandConfirmation() async throws {
+        let service = LibraryService([])
+        let model = AppModel(service: service)
+        model.connection = .connected
+        let state = PlaybackSnapshot(isPlaying: true, item: PlaybackTrack(id: "song", name: "Song", artists: [],
+                                     durationMS: 180000, trackNumber: 1, discNumber: 1, album: album("Playing")))
+        model.playback = state
+        await service.setPlayback(state)
+        await service.holdPlaybackRead()
+        let refresh = Task { await model.refreshPlayback() }
+        try await waitUntil { await service.hasHeldPlayback() }
+        await model.perform(.pause)
+        XCTAssertEqual(model.playback?.isPlaying, false)
+        await service.releasePlaybackRead()
+        await refresh.value
+        XCTAssertEqual(model.playback?.isPlaying, false, "A poll captured before pause must not restore the playing state")
+    }
+
+    func testLateToastAlbumLookupDoesNotReplaceNewerNavigation() async throws {
+        let record = album("toast")
+        let service = LibraryService([record], delay: .milliseconds(50))
+        let model = AppModel(service: service)
+        model.connection = .connected
+        let state = PlaybackSnapshot(isPlaying: true, item: PlaybackTrack(id: "track", name: "Song", artists: [],
+                                    durationMS: 180000, trackNumber: 1, discNumber: 1, album: nil, albumID: record.albumID))
+        let toast = try XCTUnwrap(TrackAnnouncement(state: state, album: nil, tracks: []))
+        let opening = Task { await model.openAlbum(from: toast) }
+        try await waitUntil { await service.albumRequestCount > 0 }
+        let chosen = album("Chosen later")
+        model.select(chosen)
+        await opening.value
+        XCTAssertEqual(model.selectedAlbum, chosen)
+        XCTAssertNil(model.notice)
     }
     func testReopeningWindowDoesNotRestartSessionOrReplaceNavigation() async {
         let model = AppModel(demo: true)

@@ -11,6 +11,10 @@ actor SpotifyClient: SpotifyService {
     }
     func resetBackoff() { quotaExceeded = false }
 
+    func album(_ id: AlbumID) async throws -> Album {
+        try JSONDecoder().decode(Album.self, from: await request("albums/\(id.rawValue)"))
+    }
+
     func artist(_ id: String) async throws -> Artist? {
         try JSONDecoder().decode(Artist.self, from: await request("artists/\(id)"))
     }

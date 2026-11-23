@@ -4,6 +4,7 @@ import SwiftUI
 @MainActor
 final class TrackToastPanel {
     static let shared = TrackToastPanel()
+    var onActivate: (@MainActor (TrackAnnouncement) -> Void)?
     private var panel: ToastWindow?
     private var host: NSHostingView<TrackToastView>?
     private var generation = 0
@@ -13,10 +14,15 @@ final class TrackToastPanel {
                 ?? NSScreen.main ?? NSScreen.screens.first else { return }
         generation += 1
         let panel = panel ?? makePanel()
-        let root = TrackToastView(announcement: announcement)
+        panel.ignoresMouseEvents = announcement.albumID == nil
+        let root = TrackToastView(announcement: announcement) { [weak self] in
+            guard let self, announcement.albumID != nil else { return }
+            self.dismiss()
+            self.onActivate?(announcement)
+        }
         if let host { host.rootView = root }
         else {
-            let host = NSHostingView(rootView: root)
+            let host = ToastHostingView(rootView: root)
             panel.contentView = host
             self.host = host
         }
@@ -34,6 +40,7 @@ final class TrackToastPanel {
 
     func dismiss() {
         generation += 1
+        panel?.ignoresMouseEvents = true
         guard let panel, panel.isVisible else { return }
         let generation = generation
         NSAnimationContext.runAnimationGroup { context in
@@ -68,8 +75,15 @@ private final class ToastWindow: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
+private final class ToastHostingView: NSHostingView<TrackToastView> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override var needsPanelToBecomeKey: Bool { false }
+}
+
 private struct TrackToastView: View {
     let announcement: TrackAnnouncement
+    let openAlbum: () -> Void
+    @State private var hovered = false
     @State private var loadedArtwork: NSImage?
     @State private var loadedURL: URL?
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
@@ -82,6 +96,29 @@ private struct TrackToastView: View {
     }
 
     var body: some View {
+        Button(action: openAlbum) {
+            card
+        }
+        .buttonStyle(.plain)
+        .disabled(announcement.albumID == nil)
+        .onHover { hovered = $0 }
+        .help(announcement.albumID == nil ? announcement.name : "打开这首歌所在的专辑")
+        .padding(10)
+        .environment(\.colorScheme, .dark)
+        .accessibilityLabel("\(announcement.counter)，\(announcement.name)")
+        .accessibilityHint(announcement.albumID == nil ? "" : "打开歌曲所在的专辑")
+        .task(id: announcement.artworkURL) {
+            let url = announcement.artworkURL
+            loadedURL = url
+            loadedArtwork = url.flatMap { ImageStore.shared.cachedImage(at: $0) }
+            guard let url else { return }
+            let image = await ImageStore.shared.image(at: url)
+            guard !Task.isCancelled else { return }
+            loadedArtwork = image
+        }
+    }
+
+    private var card: some View {
         ZStack {
             backdrop
                 .artworkGlass(cornerRadius: 18)
@@ -102,19 +139,10 @@ private struct TrackToastView: View {
         }
         .frame(maxWidth: .infinity).frame(height: 88)
         .clipShape(RoundedRectangle(cornerRadius: 18))
-        .overlay { RoundedRectangle(cornerRadius: 18).strokeBorder(.white.opacity(0.15), lineWidth: 0.5) }
-        .padding(10)
-        .environment(\.colorScheme, .dark)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(announcement.counter)，\(announcement.name)")
-        .task(id: announcement.artworkURL) {
-            let url = announcement.artworkURL
-            loadedURL = url
-            loadedArtwork = url.flatMap { ImageStore.shared.cachedImage(at: $0) }
-            guard let url else { return }
-            let image = await ImageStore.shared.image(at: url)
-            guard !Task.isCancelled else { return }
-            loadedArtwork = image
+        .contentShape(RoundedRectangle(cornerRadius: 18))
+        .overlay {
+            RoundedRectangle(cornerRadius: 18)
+                .strokeBorder(.white.opacity(hovered && announcement.albumID != nil ? 0.45 : 0.15), lineWidth: 0.5)
         }
     }
 

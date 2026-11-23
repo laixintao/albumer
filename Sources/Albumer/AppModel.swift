@@ -87,10 +87,12 @@ final class AppModel {
     @ObservationIgnored private var connectTask: Task<Void, Never>?
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var sessionGeneration = 0
+    @ObservationIgnored private var navigationGeneration = 0
     @ObservationIgnored private var rememberedDeviceID: String?
     @ObservationIgnored private var lastDeviceRefresh = Date.distantPast
     @ObservationIgnored private var devicesTask: Task<Void, Never>?
     @ObservationIgnored private var isRefreshing = false
+    @ObservationIgnored private var playbackRevision = 0
     @ObservationIgnored private var lastBackgroundNotice: (message: String, date: Date)?
     @ObservationIgnored private var pollSuspended = false
 
@@ -280,6 +282,7 @@ final class AppModel {
         await start()
     }
     func searchChanged() {
+        navigationGeneration += 1
         generation += 1
         let generation = generation
         searchTask?.cancel(); nextOffset = nil; loadMoreFailed = false; searchOffset = 0
@@ -425,8 +428,33 @@ final class AppModel {
     }
 
     func select(_ album: Album) {
+        navigationGeneration += 1
         if selectedAlbum?.id != album.id { navigationHistory.append(destination) }
         presentAlbum(album)
+    }
+
+    func openAlbum(from announcement: TrackAnnouncement) async {
+        guard isConnected, let id = announcement.albumID else { return }
+        trackAnnouncements.dismiss(announcement.id)
+        showSettings = false
+        navigationGeneration += 1
+        let navigation = navigationGeneration
+        let session = sessionGeneration
+        let cached = [announcement.album, playingAlbum, selectedAlbum].compactMap { $0 }.first { $0.albumID == id }
+            ?? albums.first { $0.albumID == id } ?? library?.albums.first { $0.albumID == id }
+            ?? artistCatalogs.values.lazy.compactMap { $0.albums.first { $0.albumID == id } }.first
+        if let cached { select(cached); return }
+        do {
+            // Retain the clicked toast's album identity even if Spotify has already moved on.
+            let album = try await service.album(id)
+            guard !Task.isCancelled, session == sessionGeneration, navigation == navigationGeneration,
+                  isConnected, !showSettings else { return }
+            guard album.albumID == id else { throw SpotifyError.invalidResponse }
+            select(album)
+        } catch {
+            guard session == sessionGeneration, navigation == navigationGeneration else { return }
+            report(error)
+        }
     }
 
     private func presentAlbum(_ album: Album) {
@@ -480,8 +508,9 @@ final class AppModel {
         }
     }
     // The view handles cover geometry before committing a back navigation.
-    func requestBack() { backRequest = UUID() }
+    func requestBack() { navigationGeneration += 1; backRequest = UUID() }
     func goBack() {
+        navigationGeneration += 1
         guard let previous = navigationHistory.popLast() else {
             if selectedAlbum != nil || selectedArtist != nil { resetNavigation() }
             else if isSearching { showCollection() }
@@ -496,6 +525,7 @@ final class AppModel {
         }
     }
     func resetNavigation() {
+        navigationGeneration += 1
         tracksTask?.cancel()
         selectedAlbum = nil; selectedArtist = nil; navigationHistory = []
     }
@@ -509,6 +539,7 @@ final class AppModel {
     }
     func openArtist(_ artist: Artist) {
         guard let id = artist.id, !id.isEmpty, selectedArtist?.artist.id != id else { return }
+        navigationGeneration += 1
         navigationHistory.append(destination)
         let catalog = artistCatalogs[id] ?? ArtistCatalog(artist: artist)
         artistCatalogs[id] = catalog
@@ -663,16 +694,17 @@ final class AppModel {
         }
     }
     func play(_ album: Album) async {
-        guard !isBusy, album.isAllowed, album.restrictions == nil else { return }
+        guard !isBusy, album.restrictions == nil else { return }
         let session = sessionGeneration
         if preferredDevice == nil { await refreshDevices() }
         guard session == sessionGeneration, !isBusy else { return }
         guard let device = preferredDevice, let id = device.id, device.isSelectable else {
             notice = "未发现可用设备，请打开 Spotify 后重试播放。"; return
         }
-        if playback?.context?.uri == album.albumID.uri && playback?.device?.id == id {
+        if playingAlbumID == album.albumID && playback?.device?.id == id {
             await perform(playback?.isPlaying == true ? .pause : .resume); return
         }
+        guard album.isAllowed else { return }
         await startAlbum(album, device: id)
     }
     private func startAlbum(_ album: Album, device: String) async {
@@ -791,9 +823,11 @@ final class AppModel {
         guard isConnected, !isRefreshing, !isBusy else { return }
         isRefreshing = true; defer { isRefreshing = false }
         let session = sessionGeneration
+        let revision = playbackRevision
         do {
             let state = try await service.playback()
-            if session == sessionGeneration {
+            // A slower poll must not replace a newer playback-command confirmation.
+            if session == sessionGeneration, revision == playbackRevision, !isBusy {
                 await applyPlayback(state)
                 if (isForeground || lastDeviceRefresh == .distantPast) && Date.now.timeIntervalSince(lastDeviceRefresh) >= 30 {
                     await refreshDevices()
@@ -802,6 +836,7 @@ final class AppModel {
         } catch { if session == sessionGeneration { report(error, quietly: true) } }
     }
     private func applyPlayback(_ state: PlaybackSnapshot?) async {
+        playbackRevision += 1
         playback = state
         if let device = state?.device, device.isSelectable {
             preferredDevice = device

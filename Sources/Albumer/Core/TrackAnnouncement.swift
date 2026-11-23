@@ -3,6 +3,8 @@ import Foundation
 struct TrackAnnouncement: Equatable, Sendable {
     let id: String
     let name: String
+    let albumID: AlbumID?
+    let album: Album?
     let artworkURL: URL?
     let position: Int?
     let total: Int?
@@ -16,6 +18,8 @@ struct TrackAnnouncement: Equatable, Sendable {
         name = track.name
         let playingAlbumID = track.albumID ?? state?.context?.albumID
         let matchingAlbum = album.flatMap { $0.albumID == playingAlbumID ? $0 : nil }
+        albumID = playingAlbumID
+        self.album = track.album ?? matchingAlbum
         artworkURL = track.artwork ?? matchingAlbum?.artwork
         let knownTotal = track.albumTotalTracks ?? matchingAlbum?.totalTracks
         let ordered = tracks.sorted {
@@ -89,6 +93,13 @@ final class TrackAnnouncementController {
     func reset() {
         cancelPresentation()
         latest = nil; playing = false; announced = false
+    }
+
+    /// Opening a toast consumes it; later metadata must not bring the same toast back.
+    func dismiss(_ announcementID: String) {
+        guard latest?.id == announcementID else { return }
+        announced = true
+        cancelPresentation()
     }
 
     private func cancelPresentation() {

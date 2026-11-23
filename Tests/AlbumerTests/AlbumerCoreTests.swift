@@ -94,6 +94,17 @@ final class AlbumerCoreTests: XCTestCase, @unchecked Sendable {
         let requests = await http.recorded()
         XCTAssertEqual(requests.first?.url?.path, "/v1/artists/artist1")
     }
+    func testDirectAlbumLookupSupportsCurrentlyPlayingSingleWithoutAddingItToLibrary() async throws {
+        let http = MockHTTP([.init(body: albumJSON("playing", type: "single"))])
+        let (client, _, _) = try await authorized(http)
+        let record = try await client.album(AlbumID(rawValue: "playing"))
+        XCTAssertEqual(record.id, "playing")
+        XCTAssertEqual(record.albumType, "single")
+        let requests = await http.recorded()
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(requests.first?.httpMethod, "GET")
+        XCTAssertEqual(requests.first?.url?.path, "/v1/albums/playing")
+    }
     func testArtistAlbumsUsesCurrentPageLimitFiltersSinglesAndRetainsPagination() async throws {
         let http = MockHTTP([.init(body: """
         {"items":[\(albumJSON("record")),\(albumJSON("single", type: "single"))],

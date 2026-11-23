@@ -25,7 +25,7 @@ struct DockPlaybackInfo {
         track = item?.name
         let names = item?.artists.map(\.name).filter { !$0.isEmpty }.joined(separator: ", ") ?? ""
         artist = item == nil ? nil : (names.isEmpty ? currentAlbum?.artist : names)
-        self.album = currentAlbum?.name
+        self.album = item?.albumName ?? currentAlbum?.name
         year = currentAlbum?.releaseYear
         let announcement = TrackAnnouncement(state: playback, album: currentAlbum, tracks: tracks)
         counter = item == nil || announcement?.position == nil ? nil : announcement?.counter

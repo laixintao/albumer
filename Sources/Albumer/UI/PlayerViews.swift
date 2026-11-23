@@ -314,10 +314,10 @@ struct PlaybackProgress: View {
 private struct AlbumPlaybackControls: View {
     @Bindable var model: AppModel
     let album: Album
-    private var current: Bool { model.playback?.context?.uri == album.albumID.uri }
+    private var current: Bool { model.hasPlayback && model.playingAlbumID == album.albumID }
     private var playing: Bool { current && model.playback?.isPlaying == true }
     private var playbackUnavailable: Bool {
-        !album.isAllowed || album.restrictions != nil ||
+        (!current && !album.isAllowed) || album.restrictions != nil ||
             (current && model.playback?.allows(playing ? "pausing" : "resuming") == false)
     }
 
