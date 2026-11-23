@@ -70,25 +70,33 @@ struct ContentView: View {
         }
     }
 
-    private var observedContent: some View {
+    private var navigationObservedContent: some View {
         transitionContent
         .onChange(of: model.backRequest) { _, _ in goBack() }
         .onChange(of: model.selectedArtist?.artist.id) { _, _ in
             if model.selectedAlbum == nil { insertion = nil }
             if model.selectedAlbum != nil { returning = nil }
         }
-        .onChange(of: scenePhase) { _, phase in model.setForeground(phase == .active) }
         .onChange(of: model.isSearching) { _, searching in
             searchFocused = searching; insertion = nil; returning = nil
         }
-        .onChange(of: model.connection) { _, _ in insertion = nil; returning = nil }
         .onChange(of: model.selectedAlbum?.id) { _, id in
             if insertion?.album.id != id { insertion = nil }
             if id != nil { returning = nil }
         }
+    }
+
+    private var lifecycleObservedContent: some View {
+        navigationObservedContent
+        .onChange(of: scenePhase) { _, phase in model.setForeground(phase == .active) }
+        .onChange(of: model.connection) { _, _ in insertion = nil; returning = nil }
         .onChange(of: model.isForeground) { _, foreground in
             if !foreground { insertion = nil; returning = nil }
         }
+    }
+
+    private var observedContent: some View {
+        lifecycleObservedContent
         .onChange(of: reduceMotion) { _, reduced in
             if reduced { insertion = nil; returning = nil }
         }
