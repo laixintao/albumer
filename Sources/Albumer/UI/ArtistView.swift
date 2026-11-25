@@ -92,14 +92,10 @@ struct ArtistView: View {
             } else {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 128, maximum: 184), spacing: 16, alignment: .top)], alignment: .leading, spacing: 20) {
                     ForEach(albums) { album in
-                        VStack(alignment: .leading, spacing: 7) {
-                            AlbumCard(model: model, album: album, current: model.playingAlbumID == album.albumID,
-                                      playing: model.playback?.isPlaying == true,
-                                      hoverEnabled: !scrolling && model.isForeground && !model.showSettings,
-                                      action: { source in selectAlbum(album, source) })
-                            Text(album.name).font(.callout.weight(.medium)).lineLimit(2)
-                            Text(album.releaseYear.map(String.init) ?? "—").font(.caption).foregroundStyle(.secondary)
-                        }
+                        AlbumCard(model: model, album: album, current: model.playingAlbumID == album.albumID,
+                                  playing: model.playback?.isPlaying == true,
+                                  hoverEnabled: !scrolling && model.isForeground && !model.showSettings,
+                                  action: { source in selectAlbum(album, source) })
                     }
                 }
             }

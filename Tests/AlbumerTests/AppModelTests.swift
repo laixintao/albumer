@@ -14,6 +14,9 @@ private actor LibraryService: SpotifyService {
     var outputs: [PlaybackDevice] = []
     var state: PlaybackSnapshot?
     var playedOn: [String] = []
+    var starts: [AlbumPlaybackStart] = []
+    var startFailure: SpotifyError?
+    var ignoresStart = false
     var transfers: [String] = []
     var commandCount = 0
     var deviceRequestCount = 0
@@ -110,15 +113,27 @@ private actor LibraryService: SpotifyService {
         transfers.append(device)
         state?.device = outputs.first { $0.id == device }
     }
-    func playAlbum(_ album: AlbumID, device: String) async throws {
+    func configureStart(failure: SpotifyError? = nil, ignored: Bool = false) {
+        startFailure = failure; ignoresStart = ignored
+    }
+    func playAlbum(_ album: AlbumID, device: String, start: AlbumPlaybackStart) async throws {
         playedOn.append(device)
-        state = PlaybackSnapshot(device: outputs.first { $0.id == device }, isPlaying: true,
+        starts.append(start)
+        if let startFailure { throw startFailure }
+        if ignoresStart { return }
+        let track = trackResults.indices.contains(start.trackIndex) ? trackResults[start.trackIndex] : nil
+        let item = track.map { PlaybackTrack(id: $0.spotifyID, name: $0.name, artists: $0.artists,
+            durationMS: $0.durationMS, trackNumber: $0.trackNumber, discNumber: $0.discNumber,
+            album: albums.first { $0.albumID == album }, linkedFromID: $0.linkedFromID) }
+        state = PlaybackSnapshot(device: outputs.first { $0.id == device }, isPlaying: true, progressMS: start.positionMS, item: item,
                                  context: PlaybackContext(type: "album", uri: album.uri), shuffleState: false, repeatState: "off")
     }
     func command(_ command: PlayerCommand, device: String?) async throws {
         commandCount += 1
         if case .pause = command { state?.isPlaying = false }
         if case .resume = command { state?.isPlaying = true }
+        if case .seek(let ms) = command { state?.progressMS = ms }
+        state?.receivedAt = .now
     }
 }
 
@@ -132,9 +147,9 @@ private final class DisconnectTokens: TokenStore, @unchecked Sendable {
 
 @MainActor
 final class AppModelTests: XCTestCase {
-    private func album(_ name: String, artwork: URL? = nil) -> Album {
+    private func album(_ name: String, artwork: URL? = nil, trackCount: Int = 10) -> Album {
         Album(id: name, name: name, artists: [Artist(name: "Artist")], albumType: "album",
-              images: artwork.map { [SpotifyImage(url: $0, width: 640, height: 640)] } ?? [], releaseDate: "2020", totalTracks: 10)
+              images: artwork.map { [SpotifyImage(url: $0, width: 640, height: 640)] } ?? [], releaseDate: "2020", totalTracks: trackCount)
     }
     private func device(_ id: String?, type: String = "computer", active: Bool = false, restricted: Bool = false) -> PlaybackDevice {
         PlaybackDevice(id: id, name: id ?? "Unavailable", type: type, isActive: active, isRestricted: restricted,
@@ -145,6 +160,236 @@ final class AppModelTests: XCTestCase {
             AlbumTrack(spotifyID: "track-\($0)", name: "Track \($0)", artists: [], durationMS: $0 * 1000,
                        trackNumber: $0, discNumber: 1)
         }
+    }
+    private var resumeTracks: [AlbumTrack] {
+        (1...4).map {
+            AlbumTrack(spotifyID: "resume-\($0)", name: "Song \($0)", artists: [], durationMS: 180000,
+                       trackNumber: ($0 - 1) % 2 + 1, discNumber: ($0 - 1) / 2 + 1)
+        }
+    }
+    private func resumeState(_ album: Album, track: AlbumTrack, position: Int, playing: Bool = false) -> PlaybackSnapshot {
+        PlaybackSnapshot(device: device("mac"), isPlaying: playing, progressMS: position,
+            item: PlaybackTrack(id: track.spotifyID, name: track.name, artists: track.artists, durationMS: track.durationMS,
+                trackNumber: track.trackNumber, discNumber: track.discNumber, album: album),
+            context: PlaybackContext(type: "album", uri: album.albumID.uri), shuffleState: false, repeatState: "off")
+    }
+    func testSelectingTrackOnSecondDiscStartsItFromZeroEvenForCurrentAlbum() async {
+        let record = album("Selected")
+        let service = LibraryService([record])
+        await service.setTracks(resumeTracks)
+        await service.setDevices([device("mac")])
+        await service.setPlayback(resumeState(record, track: resumeTracks[0], position: 42000, playing: true))
+        let model = AppModel(service: service)
+        model.connection = .connected
+        await model.refreshPlayback()
+        await model.play(resumeTracks[2], on: record)
+        XCTAssertEqual(model.playback?.item?.id, "resume-3")
+        XCTAssertEqual(model.playback?.progressMS, 0)
+        XCTAssertTrue(model.playback?.isPlaying == true)
+        let starts = await service.starts
+        let commands = await service.commandCount
+        XCTAssertEqual(starts, [AlbumPlaybackStart(trackIndex: 2, positionMS: 0)])
+        XCTAssertEqual(commands, 0, "Clicking a track must not toggle pause on the current album")
+        XCTAssertNil(model.notice)
+    }
+    func testEachAlbumResumesIndependentlyAndExplicitSelectionOverridesResume() async {
+        let first = album("First"), second = album("Second")
+        let service = LibraryService([first, second])
+        await service.setTracks(resumeTracks)
+        await service.setDevices([device("mac")])
+        let model = AppModel(service: service)
+        model.connection = .connected
+        await service.setPlayback(resumeState(first, track: resumeTracks[2], position: 42000))
+        await model.refreshPlayback()
+        await service.setPlayback(resumeState(second, track: resumeTracks[1], position: 73000))
+        await model.refreshPlayback()
+        await model.play(first)
+        XCTAssertEqual(model.playback?.item?.id, "resume-3")
+        XCTAssertEqual(model.playback?.progressMS, 42000)
+        await model.play(second)
+        XCTAssertEqual(model.playback?.item?.id, "resume-2")
+        XCTAssertEqual(model.playback?.progressMS, 73000)
+        await model.play(resumeTracks[0], on: first)
+        XCTAssertEqual(model.playback?.item?.id, "resume-1")
+        XCTAssertEqual(model.playback?.progressMS, 0)
+        XCTAssertNil(model.notice)
+    }
+    func testResumeSurvivesNewModelAndSeekAndDoesNotAutoplayAtStartup() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LocalStore(cacheRoot: root.appendingPathComponent("cache"), dataRoot: root.appendingPathComponent("data"))
+        let record = album("Restart")
+        let service = LibraryService([record])
+        await service.setTracks(resumeTracks)
+        await service.setDevices([device("mac")])
+        await service.setPlayback(resumeState(record, track: resumeTracks[3], position: 42000))
+        let model = AppModel(service: service, localStore: store, cacheAccount: "one")
+        await model.finishConnection()
+        await model.perform(.seek(64000))
+        await model.prepareToQuit()
+        let saved = await store.playbackPositions(account: "one")
+        XCTAssertEqual(saved[record.id]?.positionMS, 64000)
+
+        let freshService = LibraryService([record])
+        await freshService.setDevices([device("mac")])
+        await freshService.setTracks(resumeTracks)
+        let reopenedStore = LocalStore(cacheRoot: root.appendingPathComponent("cache"), dataRoot: root.appendingPathComponent("data"))
+        let suite = "albumer-resume-test-" + UUID().uuidString
+        let preferences = UserDefaults(suiteName: suite)!
+        defer { preferences.removePersistentDomain(forName: suite) }
+        let reopened = AppModel(service: freshService, localStore: reopenedStore, cacheAccount: "one",
+                                auth: SpotifyAuth(store: DisconnectTokens()), preferences: preferences)
+        await reopened.finishConnection()
+        let beforePlay = await freshService.starts
+        XCTAssertTrue(beforePlay.isEmpty)
+        await reopened.play(record)
+        XCTAssertEqual(reopened.playback?.item?.id, "resume-4")
+        XCTAssertEqual(reopened.playback?.progressMS, 64000)
+        XCTAssertNil(reopened.notice)
+        await reopened.prepareToQuit()
+        await reopened.disconnect()
+        let removed = await reopenedStore.playbackPositions(account: "one")
+        XCTAssertTrue(removed.isEmpty)
+    }
+    func testQuitCapturesElapsedPositionSinceLastPoll() async {
+        let record = album("Quit")
+        let service = LibraryService([record])
+        await service.setTracks(resumeTracks)
+        let model = AppModel(service: service)
+        model.connection = .connected
+        model.selectedAlbum = record
+        await model.loadTracks(record)
+        var state = resumeState(record, track: resumeTracks[1], position: 42000, playing: true)
+        state.receivedAt = .now.addingTimeInterval(-2)
+        model.playback = state
+        await model.prepareToQuit()
+        let start = model.resumeStart(for: record)
+        XCTAssertEqual(start?.trackIndex, 1)
+        XCTAssertEqual(Double(start?.positionMS ?? 0), 44000, accuracy: 1000)
+    }
+    func testListeningTotalsAreDisplayedPersistedAndNotDuplicatedOnRestart() async {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LocalStore(cacheRoot: root.appendingPathComponent("cache"), dataRoot: root.appendingPathComponent("data"))
+        let record = album("Counted")
+        let service = LibraryService([record])
+        let model = AppModel(service: service, localStore: store, cacheAccount: "one")
+        await model.finishConnection()
+        await model.prepareToQuit()
+        let origin = Date.now
+        for second in stride(from: 0, through: 60, by: 10) {
+            var state = resumeState(record, track: resumeTracks[0], position: second * 1000, playing: true)
+            state.receivedAt = origin.addingTimeInterval(Double(second))
+            await service.setPlayback(state)
+            await model.refreshPlayback()
+        }
+        XCTAssertEqual(model.history.albums[record.id], 1)
+        await model.prepareToQuit()
+        let saved = await store.history(account: "one")
+        XCTAssertEqual(saved.albums[record.id], 1)
+        let reopened = AppModel(service: service, localStore: store, cacheAccount: "one")
+        await reopened.finishConnection()
+        await reopened.prepareToQuit()
+        var state = resumeState(record, track: resumeTracks[0], position: 90000, playing: true)
+        state.receivedAt = origin.addingTimeInterval(90)
+        await service.setPlayback(state)
+        await reopened.refreshPlayback()
+        XCTAssertEqual(reopened.history.albums[record.id], 1)
+        await reopened.prepareToQuit()
+        let other = AppModel(service: LibraryService([record]), localStore: store, cacheAccount: "two")
+        await other.finishConnection()
+        XCTAssertTrue(other.history.albums.isEmpty)
+        await other.prepareToQuit()
+    }
+    func testAlbumPauseAndResumeKeepCurrentPositionWithoutRestartingContext() async {
+        let record = album("Paused")
+        let service = LibraryService([record])
+        await service.setDevices([device("mac")])
+        await service.setPlayback(resumeState(record, track: resumeTracks[1], position: 42000, playing: true))
+        let model = AppModel(service: service)
+        model.connection = .connected
+        await model.refreshPlayback()
+        await model.play(record)
+        XCTAssertEqual(model.playback?.isPlaying, false)
+        await model.play(record)
+        XCTAssertEqual(model.playback?.isPlaying, true)
+        XCTAssertEqual(model.playback?.progressMS, 42000)
+        let starts = await service.starts
+        XCTAssertTrue(starts.isEmpty)
+    }
+    func testAlbumSeekAcrossDiscsPreservesPlaybackStateAndResumePoint() async {
+        for playing in [true, false] {
+            let record = album("Timeline", trackCount: 4)
+            let service = LibraryService([record])
+            await service.setTracks(resumeTracks)
+            await service.setDevices([device("mac")])
+            await service.setPlayback(resumeState(record, track: resumeTracks[0], position: 10000, playing: playing))
+            let model = AppModel(service: service)
+            model.connection = .connected
+            model.selectedAlbum = record
+            await model.loadTracks(record)
+            await model.refreshPlayback()
+            await model.seek(in: record, to: 402000)
+            XCTAssertEqual(model.playback?.item?.id, "resume-3")
+            XCTAssertEqual(model.playback?.progressMS, 42000)
+            XCTAssertEqual(model.playback?.isPlaying, playing)
+            XCTAssertEqual(model.resumeStart(for: record), AlbumPlaybackStart(trackIndex: 2, positionMS: 42000))
+            let starts = await service.starts
+            XCTAssertEqual(starts, [AlbumPlaybackStart(trackIndex: 2, positionMS: 42000)])
+            XCTAssertNil(model.notice)
+        }
+    }
+    func testAlbumSeekWithinCurrentTrackDoesNotRestartAlbum() async {
+        let record = album("Timeline", trackCount: 4)
+        let service = LibraryService([record])
+        await service.setTracks(resumeTracks)
+        await service.setPlayback(resumeState(record, track: resumeTracks[2], position: 10000))
+        let model = AppModel(service: service)
+        model.connection = .connected
+        model.selectedAlbum = record
+        await model.loadTracks(record)
+        await model.refreshPlayback()
+        await model.seek(in: record, to: 402000)
+        XCTAssertEqual(model.playback?.progressMS, 42000)
+        XCTAssertEqual(model.playback?.isPlaying, false)
+        let starts = await service.starts
+        let commands = await service.commandCount
+        XCTAssertTrue(starts.isEmpty)
+        XCTAssertEqual(commands, 1)
+        XCTAssertNil(model.notice)
+    }
+    func testAlbumSeekDoesNotControlAnotherAlbumOrIncompleteTimeline() async {
+        let record = album("Incomplete")
+        let service = LibraryService([record])
+        await service.setTracks(resumeTracks)
+        await service.setPlayback(resumeState(record, track: resumeTracks[0], position: 10000, playing: true))
+        let model = AppModel(service: service)
+        model.connection = .connected
+        model.selectedAlbum = record
+        await model.loadTracks(record)
+        await model.refreshPlayback()
+        await model.seek(in: album("Other"), to: 402000)
+        await model.seek(in: record, to: 402000)
+        let starts = await service.starts
+        let commands = await service.commandCount
+        XCTAssertTrue(starts.isEmpty)
+        XCTAssertEqual(commands, 0)
+    }
+    func testWrongTrackCannotConfirmSelectionAndFailureDoesNotSaveRequestedPosition() async {
+        let record = album("Unconfirmed")
+        let service = LibraryService([record])
+        await service.setTracks(resumeTracks)
+        await service.setDevices([device("mac")])
+        await service.setPlayback(resumeState(record, track: resumeTracks[0], position: 42000, playing: true))
+        await service.configureStart(ignored: true)
+        let model = AppModel(service: service)
+        model.connection = .connected
+        await model.refreshPlayback()
+        await model.play(resumeTracks[2], on: record)
+        XCTAssertNotNil(model.notice)
+        XCTAssertEqual(model.playback?.item?.id, "resume-1")
+        XCTAssertEqual(model.resumeStart(for: record)?.trackIndex, 0)
+        XCTAssertFalse(model.isBusy)
     }
     func testDisconnectClearsCredentialsCachesAndLatePlayback() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -382,6 +627,70 @@ final class AppModelTests: XCTestCase {
         await Task.yield()
         XCTAssertEqual(announcements.count, count, "Resuming the same song must not show another toast")
         controller.reset()
+    }
+    func testRecommendationPromptIncludesRemainingFavoritesWithoutChangingSearchOrScroll() async throws {
+        let service = LibraryService([album("One"), album("Two"), album("Three"), album("Four")], pageSize: 2)
+        let model = AppModel(service: service)
+        model.connection = .connected
+        await model.loadPage(offset: 0)
+        model.isSearching = true; model.query = "Unrelated"; model.albums = [album("Search result")]
+        model.collectionOffset = 440; model.searchOffset = 220
+        let prompt = try await model.makeRecommendationPrompt()
+        XCTAssertEqual(prompt.albumCount, 4)
+        XCTAssertTrue(prompt.isComplete)
+        XCTAssertTrue(prompt.text.contains("Four"))
+        XCTAssertFalse(prompt.text.contains("Search result"))
+        XCTAssertEqual(model.albums.map(\.id), ["Search result"])
+        XCTAssertEqual(model.query, "Unrelated"); XCTAssertTrue(model.isSearching)
+        XCTAssertEqual(model.collectionOffset, 440); XCTAssertEqual(model.searchOffset, 220)
+        let requests = await service.requestCount
+        let commands = await service.commandCount
+        XCTAssertEqual(requests, 2)
+        XCTAssertEqual(commands, 0)
+    }
+    func testRecommendationPromptMarksOfflinePartialLibraryAndReusesCompleteCache() async throws {
+        let service = LibraryService([album("One"), album("Two")], pageSize: 1)
+        let model = AppModel(service: service)
+        model.connection = .connected
+        await model.loadPage(offset: 0)
+        await service.update([], failure: .http(503, "Temporary"))
+        let partial = try await model.makeRecommendationPrompt()
+        XCTAssertEqual(partial.albumCount, 1); XCTAssertFalse(partial.isComplete)
+        XCTAssertTrue(partial.text.contains("不是完整收藏清单"))
+        XCTAssertNil(model.notice)
+        await service.update([album("Only")])
+        await model.refreshCollection()
+        let count = await service.requestCount
+        await service.update([], failure: .http(503, "Temporary"))
+        let complete = try await model.makeRecommendationPrompt()
+        XCTAssertTrue(complete.isComplete); XCTAssertEqual(complete.albumCount, 1)
+        let newCount = await service.requestCount
+        XCTAssertEqual(newCount, count, "A complete local library can be copied without network access")
+    }
+    func testRecommendationPromptDiscardsPreviousAccountAfterSessionChanges() async throws {
+        let service = LibraryService([album("Private One"), album("Private Two")], delay: .milliseconds(40), pageSize: 1)
+        let model = AppModel(service: service)
+        model.connection = .connected
+        await model.loadPage(offset: 0)
+        let task = Task { try await model.makeRecommendationPrompt() }
+        try await waitUntil { await service.requestCount == 2 }
+        await model.enterDemo()
+        model.setForeground(false)
+        do { _ = try await task.value; XCTFail("Do not return the old account's favorites for copying") }
+        catch { XCTAssertTrue(error is CancellationError) }
+    }
+    func testRecommendationPromptRequiresNewSnapshotWhenCollectionChangesWhileLoading() async throws {
+        let service = LibraryService([album("One"), album("Two")], delay: .milliseconds(40), pageSize: 1)
+        let model = AppModel(service: service)
+        model.connection = .connected
+        await model.loadPage(offset: 0)
+        let task = Task { try await model.makeRecommendationPrompt() }
+        try await waitUntil { await service.requestCount == 2 }
+        await model.toggleSaved(album("One"))
+        do { _ = try await task.value; XCTFail("The prompt must not include a favorite removed during loading") }
+        catch {
+            guard case .collectionChanged = error as? RecommendationPromptError else { return XCTFail("Unexpected error: \(error)") }
+        }
     }
     func testSuccessfulSaveUpdatesLibraryWithoutRefetchAndKeepsPaginationConsistent() async {
         let service = LibraryService([album("One"), album("Two"), album("Three")], pageSize: 2)

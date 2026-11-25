@@ -96,7 +96,7 @@ struct SettingsPanel: View {
                         }
                     }
                 } footer: {
-                    Text(connected ? "断开连接会删除本地令牌、Client ID 和所有内容缓存。" : "点击连接即表示你已阅读隐私说明并同意使用条款。")
+                    Text(connected ? "断开连接会删除本地令牌、Client ID、所有内容缓存、续播位置和播放次数。" : "点击连接即表示你已阅读隐私说明并同意使用条款。")
                 }
             }
             .disabled(model.isDisconnecting)

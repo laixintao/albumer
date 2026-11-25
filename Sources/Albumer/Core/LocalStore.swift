@@ -12,6 +12,22 @@ struct CachedTracks: Codable, Sendable {
     let updatedAt: Date
 }
 
+struct ListeningHistory: Codable, Sendable {
+    var albums: [String: Int] = [:]
+    var tracks: [String: Int] = [:]
+    var session: ListeningCounter?
+
+    init() {}
+    private enum CodingKeys: String, CodingKey { case albums, tracks, session }
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        albums = try values.decodeIfPresent([String: Int].self, forKey: .albums) ?? [:]
+        tracks = try values.decodeIfPresent([String: Int].self, forKey: .tracks) ?? [:]
+        // Preserve totals even if an older session snapshot is no longer readable.
+        session = try? values.decodeIfPresent(ListeningCounter.self, forKey: .session)
+    }
+}
+
 actor LocalStore {
     static let shared = LocalStore()
     let cacheRoot: URL
@@ -72,18 +88,40 @@ actor LocalStore {
         guard generation == writeGeneration else { return }
         write(id, to: accountURL(account).appendingPathComponent("device.json"))
     }
+    private func playbackPositionsURL(account: String) -> URL {
+        dataRoot.appendingPathComponent("playback", isDirectory: true)
+            .appendingPathComponent("\(Self.key(account)).json")
+    }
+    func playbackPositions(account: String) -> [String: AlbumPlaybackPosition] {
+        // Resume points are user state, so they survive ordinary cache expiration.
+        guard let data = try? Data(contentsOf: playbackPositionsURL(account: account)) else { return [:] }
+        return (try? JSONDecoder().decode([String: AlbumPlaybackPosition].self, from: data)) ?? [:]
+    }
+    func savePlaybackPositions(_ positions: [String: AlbumPlaybackPosition], account: String, generation: UUID?) {
+        guard generation == writeGeneration else { return }
+        write(positions, to: playbackPositionsURL(account: account))
+    }
+    func history(account: String) -> ListeningHistory {
+        let url = dataRoot.appendingPathComponent("history/\(Self.key(account)).json")
+        guard let data = try? Data(contentsOf: url) else { return ListeningHistory() }
+        return (try? JSONDecoder().decode(ListeningHistory.self, from: data)) ?? ListeningHistory()
+    }
+    func saveHistory(_ history: ListeningHistory, account: String, generation: UUID?) {
+        guard generation == writeGeneration else { return }
+        write(history, to: dataRoot.appendingPathComponent("history/\(Self.key(account)).json"))
+    }
     /// Rotate before deleting: a late response from the old session cannot recreate files.
     func removeUserData() throws {
         writeGeneration = UUID()
         var failure: Error?
-        for url in [cacheRoot, dataRoot.appendingPathComponent("history", isDirectory: true)] {
+        for url in [cacheRoot, dataRoot.appendingPathComponent("history", isDirectory: true),
+                    dataRoot.appendingPathComponent("playback", isDirectory: true)] {
             do { try removeIfPresent(url) } catch { failure = error }
         }
         if let failure { throw failure }
     }
     func prepare(now: Date = .now) throws {
-        // Migration from releases which stored derived listening statistics.
-        try removeIfPresent(dataRoot.appendingPathComponent("history", isDirectory: true))
+        // Listening totals and resume positions are persistent user data, not expiring cache files.
         if let files = FileManager.default.enumerator(at: cacheRoot, includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey]) {
             for case let url as URL in files {
                 if (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true, !isRecent(url, now: now) {

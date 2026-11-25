@@ -129,6 +129,8 @@ struct AlbumTrack: Codable, Identifiable, Hashable, Sendable {
     var linkedFrom: SpotifyTrackReference? = nil
     var linkedFromID: String? { linkedFrom?.id }
     var id: String { spotifyID ?? "\(discNumber):\(trackNumber)" }
+    // The same recording may appear more than once in an album's ordered context.
+    var occurrenceID: String { "\(discNumber):\(trackNumber):\(id)" }
     enum CodingKeys: String, CodingKey {
         case spotifyID = "id", name, artists
         case durationMS = "duration_ms", trackNumber = "track_number", discNumber = "disc_number"
@@ -301,11 +303,14 @@ protocol SpotifyService: Sendable {
     func playback() async throws -> PlaybackSnapshot?
     func devices() async throws -> [PlaybackDevice]
     func transfer(to device: String, play: Bool) async throws
-    func playAlbum(_ album: AlbumID, device: String) async throws
+    func playAlbum(_ album: AlbumID, device: String, start: AlbumPlaybackStart) async throws
     func command(_ command: PlayerCommand, device: String?) async throws
 }
 
 extension SpotifyService {
+    func playAlbum(_ album: AlbumID, device: String) async throws {
+        try await playAlbum(album, device: device, start: .beginning)
+    }
     func album(_ id: AlbumID) async throws -> Album { throw SpotifyError.invalidResponse }
     func artist(_ id: String) async throws -> Artist? { nil }
     func artistAlbums(_ id: String, offset: Int) async throws -> AlbumPage { throw SpotifyError.invalidResponse }

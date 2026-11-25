@@ -47,6 +47,7 @@ final class AppModel {
     var tracks: [AlbumTrack] = []
     var isLoadingTracks = false
     var tracksFailed = false
+    private(set) var history = ListeningHistory()
     var isBusy = false
     var isSaving = false
     var savingAlbumID: String?
@@ -78,10 +79,13 @@ final class AppModel {
     @ObservationIgnored private var cacheGeneration: UUID?
     @ObservationIgnored private var library: CachedLibrary?
     private var trackCache: [String: CachedTracks] = [:]
+    private var playbackPositions: [String: AlbumPlaybackPosition] = [:]
     @ObservationIgnored private var artistCache: [String: Artist] = [:]
     @ObservationIgnored private var artistCatalogs: [String: ArtistCatalog] = [:]
     @ObservationIgnored private var savedVersions: [String: Int] = [:]
     @ObservationIgnored private var tracksTask: Task<Void, Never>?
+    @ObservationIgnored private var listeningCounter = ListeningCounter()
+    @ObservationIgnored private var lastHistoryWrite = Date.distantPast
     @ObservationIgnored private var service: any SpotifyService
     @ObservationIgnored private var pollTask: Task<Void, Never>?
     @ObservationIgnored private var startupTask: Task<Void, Never>?
@@ -168,6 +172,7 @@ final class AppModel {
             if let tracks { trackCache[id.rawValue] = CachedTracks(tracks: tracks, updatedAt: .now) }
             announcementMetadataAlbumID = nil
             updatePlaybackPresentation()
+            await savePlaybackPosition()
         }
     }
 
@@ -340,9 +345,14 @@ final class AppModel {
         let cached = await localStore.library(account: cacheAccount)
         let cacheGeneration = await localStore.generation()
         let rememberedDeviceID = await localStore.preferredDeviceID(account: cacheAccount)
+        let playbackPositions = await localStore.playbackPositions(account: cacheAccount)
+        let history = await localStore.history(account: cacheAccount)
         guard session == sessionGeneration else { return }
         self.cacheGeneration = cacheGeneration
         self.rememberedDeviceID = rememberedDeviceID
+        self.playbackPositions = playbackPositions
+        self.history = history
+        listeningCounter = history.session ?? ListeningCounter()
         if let cached {
             library = cached; albums = cached.albums; nextOffset = cached.nextOffset; hasLoadedPage = true
             savedIDs = Set(albums.map(\.id)); checkedSavedIDs = savedIDs
@@ -412,6 +422,38 @@ final class AppModel {
     func loadRemainingCollection() async {
         guard isConnected, !isSearching, !isLoading, !loadMoreFailed, let nextOffset else { return }
         await loadPage(offset: nextOffset, append: true, allRemaining: true)
+    }
+
+    func makeRecommendationPrompt() async throws -> AlbumRecommendationPrompt {
+        guard isConnected else { throw SpotifyError.signedOut }
+        let session = sessionGeneration
+        let versions = savedVersions
+        let service = service
+        // Use saved albums even if a search or an artist page is currently on screen.
+        var favorites = library?.albums ?? []
+        var next: Int? = library == nil ? 0 : library?.nextOffset
+        var visited = Set<Int>()
+        do {
+            while let offset = next, visited.count < 100, visited.insert(offset).inserted {
+                try Task.checkCancellation()
+                let page = try await service.savedAlbums(offset: offset)
+                try Task.checkCancellation()
+                guard session == sessionGeneration else { throw CancellationError() }
+                favorites += page.albums
+                next = page.nextOffset
+                if let next, next <= offset { break }
+            }
+        } catch {
+            // Offline copying can still use known favorites, explicitly marked as a partial list.
+            guard NetworkRetry.isTransient(error), !favorites.isEmpty else { throw error }
+        }
+        try Task.checkCancellation()
+        guard session == sessionGeneration else { throw CancellationError() }
+        guard versions == savedVersions else { throw RecommendationPromptError.collectionChanged }
+        guard let prompt = AlbumRecommendationPrompt(albums: favorites, isComplete: next == nil) else {
+            throw RecommendationPromptError.emptyLibrary
+        }
+        return prompt
     }
 
     func select(_ album: Album) {
@@ -518,6 +560,8 @@ final class AppModel {
     }
     private func resetArtistCatalogs() {
         resetTrackAnnouncements()
+        playbackPositions = [:]
+        history = ListeningHistory(); listeningCounter = ListeningCounter(); lastHistoryWrite = .distantPast
         for catalog in artistCatalogs.values { catalog.task?.cancel() }
         artistCatalogs = [:]; savedVersions = [:]
         isSaving = false; savingAlbumID = nil; checkingSavedIDs = []; saveErrors = [:]
@@ -681,6 +725,13 @@ final class AppModel {
         }
     }
     func play(_ album: Album) async {
+        await play(album, selectedTrack: nil)
+    }
+    func play(_ track: AlbumTrack, on album: Album) async {
+        guard track.spotifyID?.isEmpty == false, album.isAllowed else { return }
+        await play(album, selectedTrack: track)
+    }
+    private func play(_ album: Album, selectedTrack: AlbumTrack?) async {
         guard !isBusy, album.restrictions == nil else { return }
         let session = sessionGeneration
         if preferredDevice == nil { await refreshDevices() }
@@ -688,20 +739,77 @@ final class AppModel {
         guard let device = preferredDevice, let id = device.id, device.isSelectable else {
             notice = "未发现可用设备，请打开 Spotify 后重试播放。"; return
         }
-        if playingAlbumID == album.albumID && playback?.device?.id == id {
+        if selectedTrack == nil && hasPlayback && playingAlbumID == album.albumID && playback?.device?.id == id {
             await perform(playback?.isPlaying == true ? .pause : .resume); return
         }
         guard album.isAllowed else { return }
-        await startAlbum(album, device: id)
+        await startAlbum(album, device: id, selectedTrack: selectedTrack)
     }
-    private func startAlbum(_ album: Album, device: String) async {
+    func resumeStart(for album: Album) -> AlbumPlaybackStart? {
+        guard let position = playbackPositions[album.id], let tracks = trackCache[album.id]?.tracks else { return nil }
+        return position.start(in: tracks)
+    }
+    func seek(in album: Album, to positionMS: Int) async {
+        guard isConnected, !isBusy, album.isAllowed, album.restrictions == nil,
+              playingAlbumID == album.albumID, let state = playback, state.allows("seeking"),
+              let device = state.device, device.isSelectable, let deviceID = device.id,
+              let cached = trackCache[album.id],
+              let timeline = AlbumTimeline(tracks: cached.tracks, expectedTrackCount: album.totalTracks),
+              let item = state.item,
+              let currentIndex = PlaybackIdentity.trackIndex(item, in: cached.tracks, albumID: album.albumID) else { return }
+        let target = timeline.start(at: positionMS)
+        if target.trackIndex == currentIndex {
+            await perform(.seek(target.positionMS))
+        } else {
+            let track = cached.tracks[target.trackIndex]
+            guard track.spotifyID?.isEmpty == false else { return }
+            await startAlbum(album, device: deviceID, selectedTrack: track, positionMS: target.positionMS,
+                             keepPaused: !state.isPlaying)
+        }
+    }
+    private func startAlbum(_ album: Album, device: String, selectedTrack: AlbumTrack?, positionMS: Int = 0,
+                            keepPaused: Bool = false) async {
         guard !isBusy else { return }
         let session = sessionGeneration
+        let service = service
         isBusy = true; defer { if session == sessionGeneration { isBusy = false } }
         do {
-            try await service.playAlbum(album.albumID, device: device)
+            await savePlaybackPosition(extrapolate: true)
             guard session == sessionGeneration else { return }
-            try await confirm { $0?.context?.uri == album.albumID.uri && $0?.device?.id == device && $0?.isPlaying == true && $0?.shuffleState == false && $0?.repeatState == "off" }
+            var albumTracks = trackCache[album.id]?.tracks ?? []
+            if selectedTrack != nil || playbackPositions[album.id] != nil {
+                if albumTracks.isEmpty {
+                    albumTracks = try await service.albumTracks(album.albumID)
+                    guard session == sessionGeneration else { return }
+                    trackCache[album.id] = CachedTracks(tracks: albumTracks, updatedAt: .now)
+                }
+            }
+            let start: AlbumPlaybackStart
+            if let selectedTrack {
+                guard let index = albumTracks.firstIndex(of: selectedTrack) else { throw SpotifyError.invalidResponse }
+                start = AlbumPlaybackStart(trackIndex: index, positionMS: min(max(0, positionMS), max(0, selectedTrack.durationMS - 1)))
+            } else {
+                start = playbackPositions[album.id]?.start(in: albumTracks) ?? .beginning
+            }
+            try Task.checkCancellation()
+            try await service.playAlbum(album.albumID, device: device, start: start)
+            guard session == sessionGeneration else { return }
+            // Starting an album is a new listening session; selecting/seeking a track isn't.
+            if selectedTrack == nil { listeningCounter.beganAlbum() }
+            try await confirm { state in
+                guard state?.context?.uri == album.albumID.uri, state?.device?.id == device,
+                      state?.isPlaying == true, state?.shuffleState == false, state?.repeatState == "off" else { return false }
+                guard !albumTracks.isEmpty else { return true }
+                guard let item = state?.item, let progress = state?.progressMS else { return false }
+                return PlaybackIdentity.trackIndex(item, in: albumTracks, albumID: album.albumID) == start.trackIndex
+                    && abs(progress - start.positionMS) < 5000
+            }
+            if keepPaused {
+                guard session == sessionGeneration else { return }
+                try await service.command(.pause, device: device)
+                guard session == sessionGeneration else { return }
+                try await confirm { $0?.isPlaying == false }
+            }
         } catch { if session == sessionGeneration { report(error) } }
     }
     func togglePlayback() async {
@@ -821,6 +929,7 @@ final class AppModel {
         } catch { if session == sessionGeneration { report(error, quietly: true) } }
     }
     private func applyPlayback(_ state: PlaybackSnapshot?) async {
+        let session = sessionGeneration
         playbackRevision += 1
         playback = state
         if let device = state?.device, device.isSelectable {
@@ -829,6 +938,47 @@ final class AppModel {
             else { devices.append(device) }
         }
         updatePlaybackPresentation()
+        let album = playingAlbum
+        let albumTracks = album.flatMap { trackCache[$0.id]?.tracks } ?? []
+        let track = state?.item.flatMap { item in
+            PlaybackIdentity.trackIndex(item, in: albumTracks, albumID: album?.albumID).map { albumTracks[$0] }
+        }
+        let event = listeningCounter.observe(state, resolvedAlbum: album, resolvedTrack: track, at: state?.receivedAt ?? .now)
+        if let album = event.album { history.albums[album, default: 0] += 1 }
+        if let track = event.track { history.tracks[track, default: 0] += 1 }
+        if !event.isEmpty || Date.now.timeIntervalSince(lastHistoryWrite) >= 15 { await saveListeningHistory() }
+        guard session == sessionGeneration else { return }
+        await savePlaybackPosition()
+    }
+    private func saveListeningHistory() async {
+        history.session = listeningCounter
+        lastHistoryWrite = .now
+        if let cacheAccount, !isDemo {
+            await localStore.saveHistory(history, account: cacheAccount, generation: cacheGeneration)
+        }
+    }
+    func savePlaybackPosition(extrapolate: Bool = false) async {
+        guard isConnected, let state = playback, state.progressMS != nil,
+              let item = state.item, item.durationMS > 0, let album = playingAlbum, album.isAllowed else { return }
+        let albumTracks = trackCache[album.id]?.tracks ?? []
+        let index = PlaybackIdentity.trackIndex(item, in: albumTracks, albumID: album.albumID)
+        // Relinked tracks need a confirmed match; a stale context can belong to Spotify autoplay.
+        guard item.albumID == album.albumID || index != nil else { return }
+        let track = index.map { albumTracks[$0] }
+        guard let trackID = track?.spotifyID ?? item.id, !trackID.isEmpty else { return }
+        let position = AlbumPlaybackPosition(trackID: trackID, linkedFromID: track?.linkedFromID ?? item.linkedFromID,
+            discNumber: track?.discNumber ?? item.discNumber, trackNumber: track?.trackNumber ?? item.trackNumber,
+            positionMS: Int(state.position(at: extrapolate ? .now : state.receivedAt) * 1000))
+        guard playbackPositions[album.id] != position else { return }
+        playbackPositions[album.id] = position
+        if let cacheAccount, !isDemo {
+            await localStore.savePlaybackPositions(playbackPositions, account: cacheAccount, generation: cacheGeneration)
+        }
+    }
+    func prepareToQuit() async {
+        pollTask?.cancel()
+        await savePlaybackPosition(extrapolate: true)
+        await saveListeningHistory()
     }
     private func confirm(_ matches: (PlaybackSnapshot?) -> Bool) async throws {
         let sessionGeneration = sessionGeneration
@@ -845,6 +995,7 @@ final class AppModel {
     func setForeground(_ foreground: Bool) {
         let returning = foreground && !isForeground
         isForeground = foreground
+        if !foreground { Task { await savePlaybackPosition(extrapolate: true) } }
         restartPolling()
         if returning && isConnected && !isDemo && !isSearching && selectedAlbum == nil && !isLoading && !pollSuspended {
             Task { await refreshCollection(force: false) }
@@ -862,6 +1013,7 @@ final class AppModel {
         pollTask?.cancel()
         guard isConnected, !pollSuspended else { return }
         pollTask = Task {
+            guard !Task.isCancelled else { return }
             await refreshPlayback()
             while !Task.isCancelled && isConnected && !pollSuspended {
                 do { try await Task.sleep(for: .seconds(playbackPollDelay)) } catch { return }

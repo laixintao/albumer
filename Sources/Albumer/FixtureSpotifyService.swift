@@ -35,6 +35,11 @@ actor FixtureSpotifyService: SpotifyService {
     private var volume = 64
     private var deviceID = "preview-mac"
     private var hasStartedPlayback = !ProcessInfo.processInfo.arguments.contains("--idle-device")
+    private func trackPosition(_ index: Int, total: Int) -> (disc: Int, number: Int) {
+        guard ProcessInfo.processInfo.arguments.contains("--three-discs"), total >= 3 else { return (1, index + 1) }
+        let disc = min(2, index * 3 / total)
+        return (disc + 1, index - (disc * total + 2) / 3 + 1)
+    }
     private var device: PlaybackDevice {
         PlaybackDevice(id: deviceID, name: deviceID == "preview-mac" ? "这台 Mac" : "客厅", type: deviceID == "preview-mac" ? "computer" : "speaker", isActive: true, isRestricted: false, volumePercent: volume, supportsVolume: true)
     }
@@ -60,8 +65,9 @@ actor FixtureSpotifyService: SpotifyService {
     func albumTracks(_ album: AlbumID) async throws -> [AlbumTrack] {
         let metadata = Self.albums.first { $0.albumID == album }
         return (Self.tracks[album.rawValue] ?? []).enumerated().map { index, track in
-            AlbumTrack(spotifyID: "\(album.rawValue)-\(index + 1)", name: track.title,
-                       artists: metadata?.artists ?? [], durationMS: track.duration, trackNumber: index + 1, discNumber: 1)
+            let position = trackPosition(index, total: metadata?.totalTracks ?? 0)
+            return AlbumTrack(spotifyID: "\(album.rawValue)-\(index + 1)", name: track.title,
+                       artists: metadata?.artists ?? [], durationMS: track.duration, trackNumber: position.number, discNumber: position.disc)
         }
     }
     func setSaved(_ album: AlbumID, saved: Bool) async throws {
@@ -73,8 +79,9 @@ actor FixtureSpotifyService: SpotifyService {
         let tracks = Self.tracks[album.id] ?? []
         let current = tracks.indices.contains(track - 1) ? tracks[track - 1] : PreviewTrack(title: "预览曲目", duration: 237000)
         let elapsed = playing ? Int(Date.now.timeIntervalSince(updated) * 1000) : 0
+        let trackPosition = trackPosition(track - 1, total: album.totalTracks)
         return PlaybackSnapshot(device: device, isPlaying: playing, progressMS: min(current.duration, position + elapsed),
-            item: PlaybackTrack(id: "\(album.id)-\(track)", name: current.title, artists: album.artists, durationMS: current.duration, trackNumber: track, discNumber: 1, album: album),
+            item: PlaybackTrack(id: "\(album.id)-\(track)", name: current.title, artists: album.artists, durationMS: current.duration, trackNumber: trackPosition.number, discNumber: trackPosition.disc, album: album),
             context: PlaybackContext(type: "album", uri: album.albumID.uri), shuffleState: false, repeatState: "off", actions: PlaybackActions(disallows: ["skipping_next": track >= album.totalTracks]))
     }
     func devices() async throws -> [PlaybackDevice] {
@@ -82,10 +89,10 @@ actor FixtureSpotifyService: SpotifyService {
          PlaybackDevice(id: "preview-speaker", name: "客厅", type: "speaker", isActive: hasStartedPlayback && deviceID == "preview-speaker", isRestricted: false, volumePercent: volume, supportsVolume: true)]
     }
     func transfer(to device: String, play: Bool) async throws { deviceID = device; playing = play; updated = .now }
-    func playAlbum(_ album: AlbumID, device: String) async throws {
+    func playAlbum(_ album: AlbumID, device: String, start: AlbumPlaybackStart) async throws {
         hasStartedPlayback = true
         index = Self.albums.firstIndex { $0.id == album.rawValue } ?? 0
-        track = 1; position = 0; playing = true; updated = .now; deviceID = device
+        track = start.trackIndex + 1; position = start.positionMS; playing = true; updated = .now; deviceID = device
     }
     func command(_ command: PlayerCommand, device: String?) async throws {
         if playing { position += Int(Date.now.timeIntervalSince(updated) * 1000) }

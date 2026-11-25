@@ -86,6 +86,8 @@ private struct TrackToastView: View {
     @State private var hovered = false
     @State private var loadedArtwork: NSImage?
     @State private var loadedURL: URL?
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
 
     private var artwork: NSImage? {
         guard let url = announcement.artworkURL else { return nil }
@@ -102,6 +104,7 @@ private struct TrackToastView: View {
         .onHover { hovered = $0 }
         .help(announcement.albumID == nil ? announcement.name : "打开这首歌所在的专辑")
         .padding(10)
+        .environment(\.colorScheme, .dark)
         .accessibilityLabel("\(announcement.counter)，\(announcement.name)")
         .accessibilityHint(announcement.albumID == nil ? "" : "打开歌曲所在的专辑")
         .task(id: announcement.artworkURL) {
@@ -117,27 +120,29 @@ private struct TrackToastView: View {
 
     private var card: some View {
         ZStack {
+            backdrop
+                .artworkGlass(cornerRadius: 18)
+            // Darken after the glass reflection, so even a white cover stays legible.
+            Color.black.opacity(contrast == .increased ? 0.76 : 0.62)
             HStack(spacing: 14) {
                 thumbnail
                 VStack(alignment: .leading, spacing: 5) {
                     Text(announcement.counter)
                         .font(.system(.caption, design: .rounded).weight(.medium)).monospacedDigit()
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.white.opacity(contrast == .increased ? 1 : 0.9))
                     Text(announcement.name).font(.system(size: 14, weight: .semibold)).lineLimit(2)
-                        .foregroundStyle(.primary)
+                        .foregroundStyle(.white)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(12)
         }
         .frame(maxWidth: .infinity).frame(height: 88)
-        .background(Color(nsColor: .windowBackgroundColor))
-        .controlGlass(cornerRadius: 18)
         .clipShape(RoundedRectangle(cornerRadius: 18))
         .contentShape(RoundedRectangle(cornerRadius: 18))
         .overlay {
             RoundedRectangle(cornerRadius: 18)
-                .strokeBorder(Color.primary.opacity(hovered && announcement.albumID != nil ? 0.45 : 0.15), lineWidth: 0.5)
+                .strokeBorder(.white.opacity(hovered && announcement.albumID != nil ? 0.45 : 0.15), lineWidth: 0.5)
         }
     }
 
@@ -147,11 +152,27 @@ private struct TrackToastView: View {
             if let artwork {
                 Image(nsImage: artwork).resizable().interpolation(.high).scaledToFit()
             } else {
-                Image(systemName: "opticaldisc").font(.system(size: 26)).foregroundStyle(.secondary)
+                Image(systemName: "opticaldisc").font(.system(size: 26)).foregroundStyle(.white.opacity(0.75))
             }
         }
         .frame(width: 64, height: 64)
+        .clipShape(RoundedRectangle(cornerRadius: 7))
+        .overlay { RoundedRectangle(cornerRadius: 7).strokeBorder(.white.opacity(0.2), lineWidth: 0.5) }
         .accessibilityHidden(true)
     }
 
+    private var backdrop: some View {
+        GeometryReader { geometry in
+            ZStack {
+                Color(white: 0.16)
+                if !reduceTransparency, let artwork {
+                    Image(nsImage: artwork).resizable().scaledToFill()
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                        .blur(radius: 14, opaque: true)
+                }
+            }
+            .frame(width: geometry.size.width, height: geometry.size.height)
+            .clipped()
+        }
+    }
 }

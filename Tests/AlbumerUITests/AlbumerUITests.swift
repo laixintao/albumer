@@ -51,7 +51,7 @@ final class AlbumerUITests: XCTestCase {
         XCTAssertFalse(app.toolbars.buttons["saveAlbum"].exists)
         XCTAssertTrue(app.scrollViews["albumDetails"].buttons["saveAlbum"].exists)
         XCTAssertTrue(app.staticTexts["Paper Horizons"].exists)
-        let lastTrack = app.staticTexts["track-preview-01-10"]
+        let lastTrack = app.buttons["track-preview-01-10"]
         XCTAssertTrue(lastTrack.waitForExistence(timeout: 3))
         XCTAssertTrue(app.scrollViews["albumTracks"].frame.contains(lastTrack.frame), "A ten-track album should fit without scrolling at the default window size")
         XCTAssertEqual(app.buttons["backToCollection"].frame.midY, app.buttons["searchButton"].frame.midY, accuracy: 1)
@@ -62,10 +62,10 @@ final class AlbumerUITests: XCTestCase {
         XCTAssertTrue(app.buttons["暂停"].waitForExistence(timeout: 4))
         capture("02-stage")
         app.buttons["下一首"].click()
-        let playingTrack = app.staticTexts.matching(NSPredicate(format: "identifier == %@ AND value CONTAINS %@", "track-preview-01-2", "正在播放")).firstMatch
+        let playingTrack = app.buttons.matching(NSPredicate(format: "identifier == %@ AND label CONTAINS %@", "track-preview-01-2", "正在播放")).firstMatch
         XCTAssertTrue(playingTrack.waitForExistence(timeout: 4))
         XCTAssertTrue(app.scrollViews["albumTracks"].exists)
-        XCTAssertFalse(app.buttons["Passage 02"].exists)
+        XCTAssertTrue(app.buttons["track-preview-01-2"].isEnabled)
         app.buttons["backToCollection"].click()
         XCTAssertTrue(app.buttons["album-preview-01"].exists)
         XCTAssertFalse(app.buttons["playPause"].exists)
@@ -95,6 +95,49 @@ final class AlbumerUITests: XCTestCase {
         enterSearch("zzzznotarecord", into: field)
         XCTAssertTrue(app.staticTexts["没有找到专辑"].waitForExistence(timeout: 5))
         capture("04-empty")
+    }
+    func testTrackSelectionAndAlbumResume() {
+        app.buttons["album-preview-01"].click()
+        let selected = app.buttons["track-preview-01-5"]
+        XCTAssertTrue(selected.waitForExistence(timeout: 3))
+        selected.click()
+        let playing = app.buttons.matching(NSPredicate(format: "identifier == %@ AND label CONTAINS %@", "track-preview-01-5", "正在播放")).firstMatch
+        XCTAssertTrue(playing.waitForExistence(timeout: 5))
+        app.buttons["backToCollection"].click()
+        app.buttons["album-preview-02"].click()
+        app.buttons["playPause"].click()
+        XCTAssertTrue(app.buttons["暂停"].waitForExistence(timeout: 5))
+        app.buttons["backToCollection"].click()
+        app.buttons["album-preview-01"].click()
+        XCTAssertTrue(app.staticTexts["albumResumeInfo"].waitForExistence(timeout: 3))
+        XCTAssertEqual(app.buttons["playPause"].label, "继续播放")
+        capture("track-resume")
+        app.buttons["playPause"].click()
+        XCTAssertTrue(playing.waitForExistence(timeout: 5))
+        app.buttons["track-preview-01-1"].click()
+        let first = app.buttons.matching(NSPredicate(format: "identifier == %@ AND label CONTAINS %@", "track-preview-01-1", "正在播放")).firstMatch
+        XCTAssertTrue(first.waitForExistence(timeout: 5))
+    }
+    func testAlbumTimelineAndThreeDiscIndicators() {
+        app.terminate()
+        app.launchArguments = ["--demo", "--three-discs", "--window-size=1120x800"]
+        app.launch()
+        XCTAssertTrue(app.buttons["album-preview-01"].waitForExistence(timeout: 5))
+        app.buttons["album-preview-01"].click()
+        XCTAssertTrue(app.sliders["playbackProgress"].waitForExistence(timeout: 3))
+        XCTAssertEqual(app.staticTexts["albumTotalTime"].value as? String, "38:45")
+        for disc in 1...3 {
+            XCTAssertTrue(app.descendants(matching: .any)["albumDiscDot-\(disc)"].exists)
+        }
+        XCTAssertFalse(app.descendants(matching: .any)["albumDiscDot-4"].exists)
+        app.buttons["track-preview-01-5"].click()
+        let secondDisc = app.descendants(matching: .any).matching(NSPredicate(format: "identifier == %@ AND label CONTAINS %@", "albumDiscDot-2", "当前")).firstMatch
+        XCTAssertTrue(secondDisc.waitForExistence(timeout: 5))
+        // The first four tracks total 13:42. Changing tracks must not reset album elapsed time.
+        let elapsed = app.staticTexts["albumElapsedTime"].value as? String ?? ""
+        XCTAssertTrue(elapsed.hasPrefix("13:"))
+        XCTAssertEqual(app.staticTexts["albumTotalTime"].value as? String, "38:45")
+        capture("album-timeline-three-discs")
     }
     func testSettingsAndDevices() {
         app.buttons["refreshCollection"].click()
@@ -151,7 +194,7 @@ final class AlbumerUITests: XCTestCase {
         app.buttons["album-preview-02"].click()
         XCTAssertTrue(app.buttons["backToCollection"].waitForExistence(timeout: 3))
         app.buttons["playPause"].click()
-        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "identifier == %@ AND value CONTAINS %@", "track-preview-02-1", "正在播放")).firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "identifier == %@ AND label CONTAINS %@", "track-preview-02-1", "正在播放")).firstMatch.waitForExistence(timeout: 5))
         let speaker = app.buttons["device-preview-speaker"]
         XCTAssertTrue(speaker.waitForExistence(timeout: 3))
         speaker.click()

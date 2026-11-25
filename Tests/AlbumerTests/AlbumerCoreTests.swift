@@ -278,6 +278,26 @@ final class AlbumerCoreTests: XCTestCase, @unchecked Sendable {
         let state = try await client.playback()
         XCTAssertNil(state)
     }
+    func testRepeatedRecordingOnAnotherDiscKeepsItsAlbumPlaybackOffset() async throws {
+        let first = """
+        {"id":"repeated","name":"Song","artists":[],"duration_ms":120000,"disc_number":1,"track_number":1}
+        """
+        let repeated = """
+        {"id":"repeated","name":"Song","artists":[],"duration_ms":120000,"disc_number":2,"track_number":1}
+        """
+        let last = """
+        {"id":"last","name":"Last","artists":[],"duration_ms":180000,"disc_number":2,"track_number":2}
+        """
+        let http = MockHTTP([
+            .init(body: "{\"items\":[\(first),\(repeated),\(last)],\"next\":null,\"offset\":0,\"total\":3}")
+        ])
+        let (client, _, _) = try await authorized(http)
+        let tracks = try await client.albumTracks(AlbumID(rawValue: "record"))
+        XCTAssertEqual(tracks.map(\.id), ["repeated", "repeated", "last"])
+        XCTAssertEqual(Set(tracks.map(\.occurrenceID)).count, 3)
+        let position = AlbumPlaybackPosition(trackID: "last", linkedFromID: nil, discNumber: 2, trackNumber: 2, positionMS: 42000)
+        XCTAssertEqual(position.start(in: tracks), AlbumPlaybackStart(trackIndex: 2, positionMS: 42000))
+    }
     func test401RefreshesOnceAndKeepsOriginalRefreshToken() async throws {
         let http = MockHTTP([.init(status: 401), .init(body: "{\"access_token\":\"renewed\",\"expires_in\":3600}"), .init(status: 204)])
         let (client, _, store) = try await authorized(http)
@@ -345,6 +365,18 @@ final class AlbumerCoreTests: XCTestCase, @unchecked Sendable {
         let (client, _, _) = try await authorized(http)
         do { _ = try await client.playback(); XCTFail() } catch { XCTAssertEqual(error as? SpotifyError, .restricted) }
         do { _ = try await client.playback(); XCTFail() } catch { XCTAssertEqual(error as? SpotifyError, .noDevice) }
+    }
+    func testAlbumStartSendsSelectedTrackAndResumePositionInAlbumContext() async throws {
+        let http = MockHTTP([.init(status: 204), .init(status: 204), .init(status: 204), .init(status: 204)])
+        let (client, _, _) = try await authorized(http)
+        try await client.playAlbum(AlbumID(rawValue: "multidisc"), device: "mac",
+                                   start: AlbumPlaybackStart(trackIndex: 12, positionMS: 42000))
+        let requests = await http.recorded()
+        let body = try JSONSerialization.jsonObject(with: requests.last!.httpBody!) as! [String: Any]
+        XCTAssertEqual(body["context_uri"] as? String, "spotify:album:multidisc")
+        XCTAssertEqual((body["offset"] as? [String: Int])?["position"], 12)
+        XCTAssertEqual(body["position_ms"] as? Int, 42000)
+        XCTAssertNil(body["uris"], "The remaining album should keep playing in order")
     }
     func testIdleDeviceCanStartFirstAlbum() async throws {
         let http = MockHTTP([.init(status: 204), .init(status: 204), .init(status: 204), .init(status: 204)])

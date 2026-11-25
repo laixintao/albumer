@@ -56,7 +56,7 @@ actor SpotifyClient: SpotifyService {
             try Task.checkCancellation()
         }
         var ids = Set<String>()
-        return tracks.filter { ids.insert($0.id).inserted }
+        return tracks.filter { ids.insert($0.occurrenceID).inserted }
     }
 
     func savedAlbums(offset: Int) async throws -> AlbumPage {
@@ -89,8 +89,8 @@ actor SpotifyClient: SpotifyService {
         struct Body: Encodable { let device_ids: [String]; let play: Bool }
         _ = try await request("me/player", method: "PUT", body: JSONEncoder().encode(Body(device_ids: [device], play: play)))
     }
-    func playAlbum(_ album: AlbumID, device: String) async throws {
-        guard !album.rawValue.isEmpty else { throw SpotifyError.invalidResponse }
+    func playAlbum(_ album: AlbumID, device: String, start: AlbumPlaybackStart) async throws {
+        guard !album.rawValue.isEmpty, start.trackIndex >= 0, start.positionMS >= 0 else { throw SpotifyError.invalidResponse }
         let session = await auth.sessionVersion()
         _ = try await request("me/player/shuffle", method: "PUT", query: ["state": "false", "device_id": device])
         guard await auth.sessionVersion() == session else { throw CancellationError() }
@@ -108,10 +108,10 @@ actor SpotifyClient: SpotifyService {
         }
         guard ready else { throw SpotifyError.playbackUnconfirmed }
         guard await auth.sessionVersion() == session else { throw CancellationError() }
-        struct Offset: Encodable { let position = 0 }
-        struct Body: Encodable { let context_uri: String; let offset = Offset(); let position_ms = 0 }
+        struct Offset: Encodable { let position: Int }
+        struct Body: Encodable { let context_uri: String; let offset: Offset; let position_ms: Int }
         _ = try await request("me/player/play", method: "PUT", query: ["device_id": device],
-                              body: JSONEncoder().encode(Body(context_uri: album.uri)))
+                              body: JSONEncoder().encode(Body(context_uri: album.uri, offset: Offset(position: start.trackIndex), position_ms: start.positionMS)))
     }
     func command(_ command: PlayerCommand, device: String?) async throws {
         var query = device.map { ["device_id": $0] } ?? [:]

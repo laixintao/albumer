@@ -45,7 +45,7 @@ private actor ArtistService: SpotifyService {
     func playback() async throws -> PlaybackSnapshot? { nil }
     func devices() async throws -> [PlaybackDevice] { [] }
     func transfer(to device: String, play: Bool) async throws { playCount += 1 }
-    func playAlbum(_ album: AlbumID, device: String) async throws { playCount += 1 }
+    func playAlbum(_ album: AlbumID, device: String, start: AlbumPlaybackStart) async throws { playCount += 1 }
     func command(_ command: PlayerCommand, device: String?) async throws { playCount += 1 }
 }
 
